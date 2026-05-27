@@ -21,7 +21,7 @@ type Drop interface {
 	Name() string
 }
 
-func New(cfg config.DropConfig) (Drop, error) {
+func New(cfg config.DropBackend) (Drop, error) {
 	switch cfg.Type {
 	case "file":
 		return NewFile(cfg.Path), nil

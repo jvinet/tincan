@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jvinet/tincan/internal/bootstrap"
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
@@ -85,6 +86,10 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	if err := config.Save(g.Config, cfg); err != nil {
 		return err
 	}
+	netbootPath := bootstrap.DefaultPath(cfg.Sync.Cache)
+	if err := bootstrap.Write(netbootPath, bootstrap.Network(&cfg)); err != nil {
+		return err
+	}
 	p := newPrinter(os.Stdout)
 	p.headline("initialized admin node %q", c.Name)
 	p.blank()
@@ -92,6 +97,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	p.pairs(
 		kv("config", g.Config),
 		kv("working directory", config.SourcePath(cfg.Sync.Cache)),
+		kv("network bootstrap", netbootPath),
 	)
 	p.blank()
 	p.section("Tunnel")
@@ -115,6 +121,6 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 		secret("private key", publisherPriv),
 	)
 	p.blank()
-	p.hint("Next steps: edit the [drop] section, then run `tincan publish`")
+	p.hint("Next steps: edit the [drop.admin] and [drop.client] sections, then run `tincan publish`")
 	return nil
 }

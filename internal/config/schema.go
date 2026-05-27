@@ -41,6 +41,11 @@ type DirectoryConfig struct {
 }
 
 type DropConfig struct {
+	Admin  DropBackend `toml:"admin,omitempty"`
+	Client DropBackend `toml:"client"`
+}
+
+type DropBackend struct {
 	Type string `toml:"type"`
 
 	Endpoint  string `toml:"endpoint,omitempty"`
@@ -56,6 +61,13 @@ type DropConfig struct {
 	Password string `toml:"password,omitempty"`
 
 	Path string `toml:"path,omitempty"`
+}
+
+func (c Config) ReadDrop() DropBackend {
+	if c.Drop.Admin.Type != "" {
+		return c.Drop.Admin
+	}
+	return c.Drop.Client
 }
 
 type SyncConfig struct {
@@ -101,7 +113,7 @@ func (d OptionalDuration) Or(defaultValue time.Duration) time.Duration {
 	return d.Duration
 }
 
-func (c DropConfig) S3Secure() bool {
+func (c DropBackend) S3Secure() bool {
 	if c.Secure == nil {
 		return true
 	}

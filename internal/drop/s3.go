@@ -18,7 +18,7 @@ type S3 struct {
 	name   string
 }
 
-func NewS3(cfg config.DropConfig) (*S3, error) {
+func NewS3(cfg config.DropBackend) (*S3, error) {
 	creds := credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, "")
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  creds,

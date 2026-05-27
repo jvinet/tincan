@@ -39,7 +39,7 @@ type syncResult struct {
 }
 
 func runSyncOnce(ctx context.Context, cfg *config.Config, timeout time.Duration) (syncResult, error) {
-	d, err := loadDrop(cfg)
+	d, err := loadReadDrop(cfg)
 	if err != nil {
 		return syncResult{}, err
 	}

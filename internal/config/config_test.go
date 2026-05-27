@@ -19,7 +19,7 @@ func TestSaveLoadStrictConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Wireguard.Name != "alice" || loaded.Drop.Type != "file" {
+	if loaded.Wireguard.Name != "alice" || loaded.Drop.Admin.Type != "file" || loaded.Drop.Client.Type != "file" {
 		t.Fatalf("unexpected config: %+v", loaded)
 	}
 	if loaded.Wireguard.Interface != DefaultInterface || loaded.Wireguard.MTU != DefaultMTU {
@@ -57,17 +57,17 @@ func TestSaveLoadStrictConfig(t *testing.T) {
 
 func TestLoadValidDropTypes(t *testing.T) {
 	cases := []struct {
-		name string
-		drop DropConfig
+		name    string
+		backend DropBackend
 	}{
-		{name: "file", drop: DropConfig{Type: "file", Path: filepath.Join(t.TempDir(), "directory.bin")}},
-		{name: "http", drop: DropConfig{Type: "http", URL: "https://example.com/directory.bin", Username: "bob", Password: "secret"}},
-		{name: "s3", drop: DropConfig{Type: "s3", Endpoint: "s3.amazonaws.com", Region: "us-east-1", Bucket: "tincan-net", AccessKey: "access", SecretKey: "secret"}},
+		{name: "file", backend: DropBackend{Type: "file", Path: filepath.Join(t.TempDir(), "directory.bin")}},
+		{name: "http", backend: DropBackend{Type: "http", URL: "https://example.com/directory.bin", Username: "bob", Password: "secret"}},
+		{name: "s3", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Region: "us-east-1", Bucket: "tincan-net", AccessKey: "access", SecretKey: "secret"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validConfig(t)
-			cfg.Drop = tc.drop
+			cfg.Drop = DropConfig{Admin: tc.backend, Client: tc.backend}
 			path := filepath.Join(t.TempDir(), "config.toml")
 			if err := Save(path, cfg); err != nil {
 				t.Fatal(err)
@@ -76,11 +76,11 @@ func TestLoadValidDropTypes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if loaded.Drop.Type != tc.drop.Type {
-				t.Fatalf("drop type = %q", loaded.Drop.Type)
+			if loaded.Drop.Client.Type != tc.backend.Type {
+				t.Fatalf("drop client type = %q", loaded.Drop.Client.Type)
 			}
-			if tc.drop.Type == "s3" && loaded.Drop.ObjectKey != "directory.bin" {
-				t.Fatalf("s3 object key default = %q", loaded.Drop.ObjectKey)
+			if tc.backend.Type == "s3" && loaded.Drop.Client.ObjectKey != "directory.bin" {
+				t.Fatalf("s3 object key default = %q", loaded.Drop.Client.ObjectKey)
 			}
 		})
 	}
@@ -120,23 +120,31 @@ func TestRequireAdminRejectsMissingKey(t *testing.T) {
 	}
 }
 
+func TestRequireAdminRejectsMissingAdminDrop(t *testing.T) {
+	cfg := validConfig(t)
+	cfg.Drop.Admin = DropBackend{}
+	if err := RequireAdmin(cfg); err == nil || !strings.Contains(err.Error(), "[drop.admin]") {
+		t.Fatalf("expected missing admin drop error, got %v", err)
+	}
+}
+
 func TestValidateRejectsBadDropFields(t *testing.T) {
 	cases := []struct {
-		name string
-		drop DropConfig
+		name    string
+		backend DropBackend
 	}{
-		{name: "unsupported", drop: DropConfig{Type: "ftp", URL: "ftp://example.com"}},
-		{name: "file missing path", drop: DropConfig{Type: "file"}},
-		{name: "file mixed fields", drop: DropConfig{Type: "file", Path: "/tmp/directory.bin", Endpoint: "s3.amazonaws.com"}},
-		{name: "http missing URL", drop: DropConfig{Type: "http"}},
-		{name: "http mixed fields", drop: DropConfig{Type: "http", URL: "https://example.com/directory.bin", Bucket: "bucket"}},
-		{name: "s3 missing bucket", drop: DropConfig{Type: "s3", Endpoint: "s3.amazonaws.com"}},
-		{name: "s3 partial credentials", drop: DropConfig{Type: "s3", Endpoint: "s3.amazonaws.com", Bucket: "bucket", AccessKey: "access"}},
+		{name: "unsupported", backend: DropBackend{Type: "ftp", URL: "ftp://example.com"}},
+		{name: "file missing path", backend: DropBackend{Type: "file"}},
+		{name: "file mixed fields", backend: DropBackend{Type: "file", Path: "/tmp/directory.bin", Endpoint: "s3.amazonaws.com"}},
+		{name: "http missing URL", backend: DropBackend{Type: "http"}},
+		{name: "http mixed fields", backend: DropBackend{Type: "http", URL: "https://example.com/directory.bin", Bucket: "bucket"}},
+		{name: "s3 missing bucket", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com"}},
+		{name: "s3 partial credentials", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Bucket: "bucket", AccessKey: "access"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validConfig(t)
-			cfg.Drop = tc.drop
+			cfg.Drop = DropConfig{Admin: tc.backend, Client: tc.backend}
 			if err := cfg.Validate(false); err == nil {
 				t.Fatal("expected validation error")
 			}
@@ -177,6 +185,7 @@ func validConfig(t *testing.T) Config {
 	cfg.Directory.NetworkIdentity = identity
 	cfg.Directory.PublisherPubKey = pub
 	cfg.Directory.PublisherKey = priv
-	cfg.Drop = DropConfig{Type: "file", Path: filepath.Join(t.TempDir(), "directory.bin")}
+	backend := DropBackend{Type: "file", Path: filepath.Join(t.TempDir(), "directory.bin")}
+	cfg.Drop = DropConfig{Admin: backend, Client: backend}
 	return cfg
 }

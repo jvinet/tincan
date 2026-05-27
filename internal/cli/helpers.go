@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jvinet/tincan/internal/bootstrap"
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
@@ -22,8 +23,15 @@ func loadConfig(g *Globals) (*config.Config, error) {
 	return config.Load(g.Config)
 }
 
-func loadDrop(cfg *config.Config) (drop.Drop, error) {
-	return drop.New(cfg.Drop)
+func loadAdminDrop(cfg *config.Config) (drop.Drop, error) {
+	if cfg.Drop.Admin.Type == "" {
+		return nil, fmt.Errorf("[drop.admin] is required for this command")
+	}
+	return drop.New(cfg.Drop.Admin)
+}
+
+func loadReadDrop(cfg *config.Config) (drop.Drop, error) {
+	return drop.New(cfg.ReadDrop())
 }
 
 func fetchDirectory(ctx context.Context, cfg *config.Config, d drop.Drop) (directory.Directory, error) {
@@ -68,6 +76,9 @@ func publishDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir 
 		if err := cache.WriteSource(cfg.Sync.Cache, dir); err != nil {
 			return err
 		}
+	}
+	if err := bootstrap.Write(bootstrap.DefaultPath(cfg.Sync.Cache), bootstrap.Network(cfg)); err != nil {
+		return err
 	}
 	return nil
 }

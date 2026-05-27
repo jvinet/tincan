@@ -73,9 +73,8 @@ func (c *Config) ApplyDefaults() {
 	if c.Wireguard.MTU == 0 {
 		c.Wireguard.MTU = DefaultMTU
 	}
-	if c.Drop.Type == "s3" && c.Drop.ObjectKey == "" {
-		c.Drop.ObjectKey = "directory.bin"
-	}
+	applyBackendDefaults(&c.Drop.Admin)
+	applyBackendDefaults(&c.Drop.Client)
 	if !c.Sync.Interval.Set {
 		c.Sync.Interval = NewDuration(DefaultInterval)
 	}
@@ -84,6 +83,12 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Sync.PIDFile == "" {
 		c.Sync.PIDFile = DefaultPIDFile
+	}
+}
+
+func applyBackendDefaults(b *DropBackend) {
+	if b.Type == "s3" && b.ObjectKey == "" {
+		b.ObjectKey = "directory.bin"
 	}
 }
 
@@ -136,48 +141,59 @@ func (c Config) Validate(allowIncomplete bool) error {
 			return err
 		}
 	}
-	return validateDrop(c.Drop)
+	if c.Drop.Admin.Type != "" {
+		if err := validateDropBackend(c.Drop.Admin); err != nil {
+			return fmt.Errorf("[drop.admin]: %w", err)
+		}
+	}
+	if err := validateDropBackend(c.Drop.Client); err != nil {
+		return fmt.Errorf("[drop.client]: %w", err)
+	}
+	return nil
 }
 
 func RequireAdmin(c Config) error {
 	if strings.TrimSpace(c.Directory.PublisherKey) == "" {
 		return errors.New("admin publisher key is required for this command")
 	}
+	if c.Drop.Admin.Type == "" {
+		return errors.New("[drop.admin] is required for this command")
+	}
 	return keys.ValidateEd25519Pair(c.Directory.PublisherPubKey, c.Directory.PublisherKey)
 }
 
-func validateDrop(c DropConfig) error {
-	switch c.Type {
+func validateDropBackend(b DropBackend) error {
+	switch b.Type {
 	case "file":
-		if c.Path == "" {
-			return errors.New("[drop].path is required for file drops")
+		if b.Path == "" {
+			return errors.New("path is required for file drops")
 		}
-		return reject(c, "path", c.Endpoint, c.Region, c.Bucket, c.ObjectKey, c.AccessKey, c.SecretKey, c.URL, c.Username, c.Password)
+		return rejectBackendFields("path", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password)
 	case "http":
-		if c.URL == "" {
-			return errors.New("[drop].url is required for http drops")
+		if b.URL == "" {
+			return errors.New("url is required for http drops")
 		}
-		return reject(c, "url/username/password", c.Endpoint, c.Region, c.Bucket, c.ObjectKey, c.AccessKey, c.SecretKey, c.Path)
+		return rejectBackendFields("url/username/password", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.Path)
 	case "s3":
-		if c.Endpoint == "" {
-			return errors.New("[drop].endpoint is required for s3 drops")
+		if b.Endpoint == "" {
+			return errors.New("endpoint is required for s3 drops")
 		}
-		if c.Bucket == "" {
-			return errors.New("[drop].bucket is required for s3 drops")
+		if b.Bucket == "" {
+			return errors.New("bucket is required for s3 drops")
 		}
-		if (c.AccessKey == "") != (c.SecretKey == "") {
-			return errors.New("[drop].access_key and secret_key must be provided together")
+		if (b.AccessKey == "") != (b.SecretKey == "") {
+			return errors.New("access_key and secret_key must be provided together")
 		}
-		return reject(c, "endpoint/region/bucket/object_key/access_key/secret_key/secure", c.URL, c.Username, c.Password, c.Path)
+		return rejectBackendFields("endpoint/region/bucket/object_key/access_key/secret_key/secure", b.URL, b.Username, b.Password, b.Path)
 	default:
-		return fmt.Errorf("unsupported [drop].type %q", c.Type)
+		return fmt.Errorf("unsupported type %q", b.Type)
 	}
 }
 
-func reject(_ DropConfig, allowed string, values ...string) error {
+func rejectBackendFields(allowed string, values ...string) error {
 	for _, value := range values {
 		if value != "" {
-			return fmt.Errorf("[drop] contains fields not valid for this type; allowed fields: %s", allowed)
+			return fmt.Errorf("contains fields not valid for this type; allowed fields: %s", allowed)
 		}
 	}
 	return nil
@@ -187,12 +203,23 @@ func SkeletonDrop(dropType string) DropConfig {
 	secure := true
 	switch dropType {
 	case "s3":
-		return DropConfig{Type: "s3", Endpoint: "s3.amazonaws.com", Region: "us-east-1", Bucket: "my-tincan-net", ObjectKey: "directory.bin", Secure: &secure}
+		admin := DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Region: "us-east-1", Bucket: "my-tincan-net", ObjectKey: "directory.bin", AccessKey: "admin-access-key", SecretKey: "admin-secret-key", Secure: &secure}
+		client := DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Region: "us-east-1", Bucket: "my-tincan-net", ObjectKey: "directory.bin", Secure: &secure}
+		return DropConfig{Admin: admin, Client: client}
 	case "http":
-		return DropConfig{Type: "http", URL: "https://example.com/_vpn/directory"}
+		admin := DropBackend{Type: "file", Path: DefaultStateDir + "/publish/directory.bin"}
+		client := DropBackend{Type: "http", URL: "https://example.com/_vpn/directory"}
+		return DropConfig{Admin: admin, Client: client}
 	case "file":
-		return DropConfig{Type: "file", Path: "/mnt/shared/tincan/directory.bin"}
+		b := DropBackend{Type: "file", Path: "/mnt/shared/tincan/directory.bin"}
+		return DropConfig{Admin: b, Client: b}
 	default:
-		return DropConfig{Type: dropType}
+		b := DropBackend{Type: dropType}
+		return DropConfig{Admin: b, Client: b}
 	}
+}
+
+func SkeletonClientDrop(dropType string) DropConfig {
+	full := SkeletonDrop(dropType)
+	return DropConfig{Client: full.Client}
 }

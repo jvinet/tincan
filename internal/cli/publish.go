@@ -20,7 +20,7 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return err
 	}
-	d, err := loadDrop(cfg)
+	d, err := loadAdminDrop(cfg)
 	if err != nil {
 		return err
 	}

@@ -5,15 +5,17 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jvinet/tincan/internal/bootstrap"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
 	"github.com/jvinet/tincan/internal/keys"
 )
 
 type AddNodeCmd struct {
-	Name     string `required:"" help:"Node name to add."`
-	PubKey   string `help:"Existing WireGuard public key for the node."`
-	Endpoint string `help:"Published endpoint for the node, as host:port."`
+	Name      string `required:"" help:"Node name to add."`
+	PubKey    string `help:"Existing WireGuard public key for the node."`
+	Endpoint  string `help:"Published endpoint for the node, as host:port."`
+	Bootstrap string `type:"path" help:"Write a node bootstrap JSON file at this path."`
 }
 
 func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
@@ -24,7 +26,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return err
 	}
-	d, err := loadDrop(cfg)
+	d, err := loadAdminDrop(cfg)
 	if err != nil {
 		return err
 	}
@@ -63,6 +65,17 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
 		return err
 	}
+	if c.Bootstrap != "" {
+		node := bootstrap.Node{
+			Name:       c.Name,
+			TunnelIP:   tunnelIP,
+			PublicKey:  publicKey,
+			PrivateKey: generatedPrivateKey,
+		}
+		if err := bootstrap.Write(c.Bootstrap, bootstrap.WithNode(bootstrap.Network(cfg), node)); err != nil {
+			return err
+		}
+	}
 	p := newPrinter(os.Stdout)
 	p.headline("added node %q", c.Name)
 	p.blank()
@@ -75,9 +88,18 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		items = append(items, secret("private key", generatedPrivateKey))
 	}
 	p.pairs(items...)
+	if c.Bootstrap != "" {
+		p.blank()
+		p.section("Bootstrap")
+		p.pairs(kv("file", c.Bootstrap))
+	}
 	if generatedPrivateKey != "" {
 		p.blank()
-		p.warn("transmit this private key securely to the node operator, then clear this terminal")
+		if c.Bootstrap != "" {
+			p.warn("the bootstrap file contains a WireGuard private key; transmit it over a secure channel")
+		} else {
+			p.warn("transmit this private key securely to the node operator, then clear this terminal")
+		}
 	}
 	return nil
 }

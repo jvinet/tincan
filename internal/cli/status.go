@@ -87,7 +87,7 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		out.Daemon["alive"] = false
 		out.Daemon["error"] = err.Error()
 	}
-	if d, err := loadDrop(cfg); err == nil {
+	if d, err := loadReadDrop(cfg); err == nil {
 		statCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		meta, statErr := d.Stat(statCtx)
 		cancel()

@@ -34,6 +34,7 @@ older than the one they already cached, which protects against rollback.
 - Full-mesh WireGuard peer configuration via `wgctrl`/netlink (no `wg-quick`)
 - Explicit `up` / `down` / `sync` lifecycle, plus a daemon mode that reconciles
   continuously with SIGHUP-triggered reload
+- Network and node bootstrap files for one-shot client onboarding
 - Local cache + serial file so the network stays up if the dead-drop is
   temporarily unreachable
 
@@ -82,27 +83,39 @@ sudo tincan init \
 It prints all the generated keys to stdout, including the secrets you need to
 distribute. **Save these somewhere safe** — `init` does not.
 
-Now edit `/etc/tincan/config.toml` and fill in the `[drop]` block (bucket name,
-credentials, etc.), then publish the initial directory:
+Now edit `/etc/tincan/config.toml` and fill in `[drop.admin]` (where this node
+writes the directory) and `[drop.client]` (how other nodes read it). For most
+backends these are the same coordinates with different credentials; for HTTP,
+`[drop.admin]` is the local file you write before uploading and `[drop.client]`
+is the URL clients fetch from. See [Dead-drop backends](#dead-drop-backends).
+
+Then publish the initial directory:
 
 ```sh
 sudo tincan publish
 ```
 
-`publish` seals the working directory, signs it with the publisher key, and
-uploads it to the dead-drop.
+`publish` seals the working directory, signs it with the publisher key, uploads
+it to the dead-drop, and refreshes `/var/lib/tincan/netboot.json` — the network
+bootstrap file you'll distribute to clients.
 
 ### 2. Add client nodes (admin side)
 
 ```sh
-sudo tincan add-node --name bob --endpoint 198.51.100.7:51820
+sudo tincan add-node --name bob --endpoint 198.51.100.7:51820 \
+  --bootstrap /tmp/bob.json
 ```
 
 If you don't pass `--pubkey`, Tincan generates a WireGuard keypair for the new
-node and prints the **private key** to stdout once. Transmit it to the operator
-over a secure channel, then clear your terminal. If the operator has already
-generated their own keys locally, pass `--pubkey` instead so the secret never
-leaves their machine.
+node. Without `--bootstrap`, the **private key** is printed to stdout once for
+you to transmit manually; with `--bootstrap`, it's written into a JSON
+**node bootstrap file** that contains everything the new node needs to come up.
+Transmit that file over a secure channel and delete it after the client has
+joined.
+
+If the operator has already generated their own keys locally, pass `--pubkey`
+instead so the secret never leaves their machine. The bootstrap file is still
+useful in that case — it just won't contain a private key.
 
 `--endpoint` is optional. Omit it for nodes that sit behind NAT and dial out;
 include `host:port` for nodes that are publicly reachable. A mesh of
@@ -122,7 +135,18 @@ after editing the working directory by hand or to recover from a partial upload.
 
 ### 3. Bring up a client node
 
-On the new node, install the `tincan` binary, then run:
+On the new node, install the `tincan` binary. The fastest path is to use the
+bootstrap file the admin sent in step 2:
+
+```sh
+sudo tincan join --bootstrap /tmp/bob.json
+sudo tincan up
+```
+
+`join --bootstrap` populates `[directory]`, `[drop.client]`, and (if the admin
+generated it) the WireGuard keypair from the bootstrap. Nothing else to edit.
+
+If you don't have a bootstrap file, do it manually:
 
 ```sh
 sudo tincan join --name bob --drop-type s3
@@ -139,8 +163,8 @@ Edit the config and fill in:
 
 - `[directory]` — `network_identity` (the age secret key) and
   `publisher_pubkey`, both from the admin's `init` output
-- `[drop]` — the same backend coordinates the admin used (read-only credentials
-  are fine for clients)
+- `[drop.client]` — the same backend coordinates the admin uses (read-only
+  credentials are fine for clients)
 
 Then bring the tunnel up:
 
@@ -205,44 +229,59 @@ with a systemd timer if you'd rather schedule it externally.)
 
 ## Dead-drop backends
 
-All three backends store and retrieve the same opaque blob. Pick whichever is
-operationally easiest.
+Every config has two drop sections: `[drop.admin]` is how this node writes the
+directory (admin only); `[drop.client]` is how everyone reads it. Keeping them
+separate means client nodes never see admin credentials, and admins can write
+locally while clients pull from HTTP/CDN.
 
 ### S3-compatible object storage
 
 ```toml
-[drop]
+[drop.admin]
 type = "s3"
 endpoint = "s3.amazonaws.com"   # or your MinIO/Backblaze/etc. host
 region = "us-east-1"
 bucket = "my-tincan-net"
 object_key = "directory.bin"    # defaults to "directory.bin"
-access_key = "..."              # required on the admin
-secret_key = "..."              # required on the admin
+access_key = "..."              # admin's read+write key
+secret_key = "..."
 # secure = false                # set to disable TLS (HTTP-only MinIO etc.)
+
+[drop.client]
+type = "s3"
+endpoint = "s3.amazonaws.com"
+region = "us-east-1"
+bucket = "my-tincan-net"
+object_key = "directory.bin"
+# access_key / secret_key — omit for anonymous read, or provision read-only keys
 ```
 
-Clients can read without credentials if the bucket policy allows it; otherwise
-provision read-only keys.
-
-### HTTP (read-only)
+### HTTP (read-only for clients)
 
 ```toml
-[drop]
+[drop.admin]
+type = "file"
+path = "/var/www/tincan/directory.bin"   # admin writes the file; web server serves it
+
+[drop.client]
 type = "http"
 url = "https://example.com/_vpn/directory.bin"
 # username = "bob"
 # password = "letmein"
 ```
 
-HTTP is download-only — admins cannot `publish` to an HTTP drop. Pair it with
-S3/file for publishing and HTTP for clients if you want to expose the blob
-through a CDN or static host.
+HTTP is download-only — admins cannot `publish` to an HTTP drop. Combine a
+file `[drop.admin]` (written into a web root) with an HTTP `[drop.client]` so
+clients fetch through a CDN or static host.
 
 ### Local filesystem
 
 ```toml
-[drop]
+[drop.admin]
+type = "file"
+path = "/mnt/shared/tincan/directory.bin"
+
+[drop.client]
 type = "file"
 path = "/mnt/shared/tincan/directory.bin"
 ```
@@ -271,8 +310,12 @@ network_identity = "AGE-SECRET-KEY-1..."   # shared age secret (every node)
 publisher_pubkey = "..."                   # admin's Ed25519 public key (every node)
 publisher_key    = "..."                   # admin's Ed25519 private key (admins only)
 
-[drop]
+[drop.admin]    # admin-only: where this node writes the directory
 type = "s3"   # or "http" / "file" — see backend sections above
+# ...backend-specific fields...
+
+[drop.client]   # how every node reads the directory
+type = "s3"
 # ...backend-specific fields...
 
 [sync]
@@ -282,7 +325,7 @@ pid_file = "/run/tincan.pid"
 ```
 
 Defaults are populated automatically; you usually only need to set
-`[wireguard]`, `[directory]`, and `[drop]`.
+`[wireguard]`, `[directory]`, `[drop.admin]` (admin only), and `[drop.client]`.
 
 ## Files Tincan touches
 
@@ -291,6 +334,7 @@ Defaults are populated automatically; you usually only need to set
 - `/var/lib/tincan/cache.serial` — monotonic serial guard against rollback
 - `/var/lib/tincan/state.json` — sync metadata (last sync time, ETag)
 - `/var/lib/tincan/directory-source.bin` — admin-only working directory
+- `/var/lib/tincan/netboot.json` — admin-only network bootstrap (mode `0600`)
 - `/run/tincan.pid` — daemon PID file
 
 ## Development

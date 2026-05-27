@@ -98,7 +98,8 @@ func testFlowConfigAndDirectory(t *testing.T, serial uint64) (*config.Config, di
 	cfg.Directory.NetworkIdentity = identity
 	cfg.Directory.PublisherPubKey = publisherPub
 	cfg.Directory.PublisherKey = publisherPriv
-	cfg.Drop = config.DropConfig{Type: "file", Path: filepath.Join(t.TempDir(), "drop.bin")}
+	backend := config.DropBackend{Type: "file", Path: filepath.Join(t.TempDir(), "drop.bin")}
+	cfg.Drop = config.DropConfig{Admin: backend, Client: backend}
 	cfg.Sync.Cache = filepath.Join(t.TempDir(), "cache.bin")
 	dir := directory.Directory{
 		SchemaVersion: directory.SchemaVersion,

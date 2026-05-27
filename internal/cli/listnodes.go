@@ -14,7 +14,7 @@ func (c *ListNodesCmd) Run(ctx context.Context, g *Globals) error {
 	if err != nil {
 		return err
 	}
-	d, err := loadDrop(cfg)
+	d, err := loadReadDrop(cfg)
 	if err != nil {
 		return err
 	}
