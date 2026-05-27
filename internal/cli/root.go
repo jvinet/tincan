@@ -14,7 +14,6 @@ import (
 
 type Globals struct {
 	Config string `short:"c" default:"/etc/tincan/config.toml" help:"Path to config file." type:"path"`
-	JSON   bool   `name:"json-logs" help:"Emit logs as JSON."`
 }
 
 type App struct {
@@ -75,7 +74,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		app.Config = abs
 	}
-	logger := tincanlog.Setup(app.JSON)
+	logger := tincanlog.Setup()
 	if err := ctx.Run(&app.Globals); err != nil {
 		logger.Error(err.Error())
 		return 1

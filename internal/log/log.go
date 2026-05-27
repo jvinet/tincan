@@ -5,14 +5,8 @@ import (
 	"os"
 )
 
-func Setup(json bool) *slog.Logger {
-	var handler slog.Handler
-	if json {
-		handler = slog.NewJSONHandler(os.Stderr, nil)
-	} else {
-		handler = slog.NewTextHandler(os.Stderr, nil)
-	}
-	logger := slog.New(handler)
+func Setup() *slog.Logger {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 	return logger
 }
