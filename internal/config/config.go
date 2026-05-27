@@ -60,10 +60,47 @@ func Save(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
-	if err := renameio.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+	if err := renameio.WriteFile(path, stripRedundantParentHeaders(buf.Bytes()), 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
+}
+
+// stripRedundantParentHeaders removes parent table headers like a bare [drop]
+// that go-toml v2 emits immediately before [drop.admin] / [drop.client].
+// The parent header carries no fields of its own and is implicit in the
+// sub-table headers; keeping it just clutters the file.
+func stripRedundantParentHeaders(data []byte) []byte {
+	lines := bytes.Split(data, []byte("\n"))
+	out := make([][]byte, 0, len(lines))
+	for i := range lines {
+		if isRedundantParentHeader(lines, i) {
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return bytes.Join(out, []byte("\n"))
+}
+
+func isRedundantParentHeader(lines [][]byte, i int) bool {
+	line := bytes.TrimSpace(lines[i])
+	if len(line) < 3 || line[0] != '[' || line[len(line)-1] != ']' {
+		return false
+	}
+	inner := line[1 : len(line)-1]
+	if bytes.IndexByte(inner, '.') >= 0 {
+		return false
+	}
+	prefix := append([]byte{'['}, inner...)
+	prefix = append(prefix, '.')
+	for j := i + 1; j < len(lines); j++ {
+		next := bytes.TrimSpace(lines[j])
+		if len(next) == 0 {
+			continue
+		}
+		return bytes.HasPrefix(next, prefix)
+	}
+	return false
 }
 
 func (c *Config) ApplyDefaults() {
