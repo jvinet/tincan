@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"net"
 	"os"
@@ -20,7 +19,14 @@ import (
 )
 
 func loadConfig(g *Globals) (*config.Config, error) {
-	return config.Load(g.Config)
+	cfg, err := config.Load(g.Config)
+	if err != nil {
+		return nil, err
+	}
+	if st, statErr := os.Stat(g.Config); statErr == nil && st.Mode().Perm() != 0o600 {
+		newPrinter(os.Stderr).warn("config file should be mode 0600 (path: %s, mode: %s)", g.Config, st.Mode().Perm())
+	}
+	return cfg, nil
 }
 
 func loadAdminDrop(cfg *config.Config) (drop.Drop, error) {
@@ -51,7 +57,7 @@ func fetchAdminDirectory(ctx context.Context, cfg *config.Config, d drop.Drop) (
 	if err == nil {
 		return dir, nil
 	}
-	slog.Warn("failed to fetch current directory from drop, trying local source", "error", err)
+	newPrinter(os.Stderr).fail("failed to fetch current directory from drop, trying local source; %v", err)
 	if source, sourceErr := cache.ReadSource(cfg.Sync.Cache); sourceErr == nil {
 		return source, nil
 	}

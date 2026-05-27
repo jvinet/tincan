@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -105,14 +104,16 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	sigCh := make(chan os.Signal, 4)
 	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)
+	pout := newPrinter(os.Stdout)
+	perr := newPrinter(os.Stderr)
 	for {
 		cfg, err := config.Load(configPath)
 		if err != nil {
-			slog.Error("failed to load config", "error", err)
+			perr.fail("failed to load config; %v", err)
 		} else {
 			timeout := iterationTimeout(cfg.Sync.Interval.Or(config.DefaultInterval))
-			if err := runDaemonIteration(ctx, cfg, timeout); err != nil {
-				slog.Error("daemon iteration failed", "error", err)
+			if err := runDaemonIteration(ctx, cfg, timeout, pout); err != nil {
+				perr.fail("daemon iteration failed; %v", err)
 			}
 		}
 		interval := config.DefaultInterval
@@ -132,10 +133,10 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			}
 			switch sig {
 			case syscall.SIGHUP:
-				slog.Info("received SIGHUP, reloading config and reconciling")
+				pout.hint("received SIGHUP, reloading config and reconciling")
 				continue
 			case syscall.SIGTERM, syscall.SIGINT:
-				slog.Info("received shutdown signal", "signal", sig.String())
+				pout.hint("received shutdown signal (%s)", sig.String())
 				return nil
 			}
 		case <-timer.C:
@@ -143,16 +144,16 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	}
 }
 
-func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration) error {
+func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer) error {
 	res, err := runSyncOnce(ctx, cfg, timeout)
 	if err != nil {
 		return err
 	}
+	source := "drop"
 	if res.FromCache {
-		slog.Info("synced from local cache", "serial", res.Serial)
-	} else {
-		slog.Info("synced from drop", "serial", res.Serial)
+		source = "local cache"
 	}
+	p.headline("synced from %s (serial: %d)", source, res.Serial)
 	self, err := findSelf(cfg, res.Directory)
 	if err != nil {
 		return err

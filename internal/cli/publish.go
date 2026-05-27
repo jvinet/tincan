@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/jvinet/tincan/internal/cache"
@@ -28,11 +27,12 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	if err != nil {
 		return fmt.Errorf("read working directory: %w", err)
 	}
+	p := newPrinter(os.Stdout)
 	remote, err := fetchDirectory(ctx, cfg, d)
 	if err == nil && remote.Serial >= source.Serial {
 		source.Serial = remote.Serial
 	} else if err != nil {
-		slog.Warn("failed to fetch remote directory before publish", "error", err)
+		p.fail("failed to fetch remote directory before publish; %v", err)
 	}
 	if err := bumpDirectory(&source); err != nil {
 		return err
@@ -40,7 +40,6 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	if err := publishDirectory(ctx, cfg, d, source, true); err != nil {
 		return err
 	}
-	p := newPrinter(os.Stdout)
 	p.headline("published directory (serial: %d)", source.Serial)
 	return nil
 }

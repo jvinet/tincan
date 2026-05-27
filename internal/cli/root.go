@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/alecthomas/kong"
-	tincanlog "github.com/jvinet/tincan/internal/log"
 	"github.com/jvinet/tincan/internal/version"
 )
 
@@ -74,9 +73,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		app.Config = abs
 	}
-	logger := tincanlog.Setup()
 	if err := ctx.Run(&app.Globals); err != nil {
-		logger.Error(err.Error())
+		newPrinter(stderr).fail("%s", err)
 		return 1
 	}
 	return 0

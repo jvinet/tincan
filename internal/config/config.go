@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,9 +34,6 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("open config: %w", err)
 	}
 	defer f.Close()
-	if st, err := f.Stat(); err == nil && st.Mode().Perm() != 0o600 {
-		slog.Warn("config file should be mode 0600", "path", path, "mode", st.Mode().Perm().String())
-	}
 	cfg := Default()
 	dec := toml.NewDecoder(f)
 	dec.DisallowUnknownFields()

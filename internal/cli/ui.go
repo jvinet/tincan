@@ -11,6 +11,7 @@ const (
 	ansiReset  = "\x1b[0m"
 	ansiBold   = "\x1b[1m"
 	ansiDim    = "\x1b[2m"
+	ansiRed    = "\x1b[31m"
 	ansiGreen  = "\x1b[32m"
 	ansiYellow = "\x1b[33m"
 	ansiCyan   = "\x1b[36m"
@@ -71,6 +72,11 @@ func (p *printer) hint(format string, args ...any) {
 func (p *printer) warn(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	fmt.Fprintf(p.w, "%s %s\n", p.style(ansiYellow+ansiBold, "!"), p.style(ansiYellow, msg))
+}
+
+func (p *printer) fail(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	fmt.Fprintf(p.w, "%s %s\n", p.style(ansiRed+ansiBold, "✗"), p.style(ansiRed, msg))
 }
 
 type pair struct {
