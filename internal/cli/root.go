@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -31,31 +32,49 @@ type App struct {
 }
 
 func Main(args []string) int {
+	return run(args, os.Stdout, os.Stderr)
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
 	var app App
 	parser, err := kong.New(&app,
 		kong.Name("tincan"),
 		kong.Description("Mesh-VPN orchestration for WireGuard."),
+		kong.Writers(stdout, stderr),
+		kong.BindTo(context.Background(), (*context.Context)(nil)),
 		kong.UsageOnError(),
 	)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(stderr, err)
 		return 2
+	}
+	if len(args) == 0 {
+		ctx, err := kong.Trace(parser, args)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		if err := ctx.PrintUsage(false); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		return 0
 	}
 	ctx, err := parser.Parse(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	if app.Config != "" && !filepath.IsAbs(app.Config) {
 		abs, err := filepath.Abs(app.Config)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(stderr, err)
 			return 2
 		}
 		app.Config = abs
 	}
 	logger := tincanlog.Setup(app.JSON)
-	if err := ctx.Run(context.Background(), &app.Globals); err != nil {
+	if err := ctx.Run(&app.Globals); err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
@@ -65,6 +84,11 @@ func Main(args []string) int {
 type VersionCmd struct{}
 
 func (VersionCmd) Run() error {
-	fmt.Printf("tincan %s\ncommit: %s\ndate: %s\n", version.Version, version.Commit, version.Date)
+	p := newPrinter(os.Stdout)
+	fmt.Fprintln(os.Stdout, p.style(ansiBold, "tincan "+version.Version))
+	p.pairs(
+		kv("commit", version.Commit),
+		kv("date", version.Date),
+	)
 	return nil
 }

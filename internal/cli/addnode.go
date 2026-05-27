@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
@@ -62,12 +63,21 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
 		return err
 	}
-	fmt.Printf("added node %q\n", c.Name)
-	fmt.Printf("allocated IP: %s\n", tunnelIP)
-	fmt.Printf("WireGuard public key: %s\n", publicKey)
+	p := newPrinter(os.Stdout)
+	p.headline("added node %q", c.Name)
+	p.blank()
+	p.section("Assignment")
+	items := []pair{
+		kv("allocated IP", tunnelIP),
+		kv("public key", publicKey),
+	}
 	if generatedPrivateKey != "" {
-		fmt.Printf("WireGuard private key: %s\n", generatedPrivateKey)
-		fmt.Println("transmit this private key securely to the node operator, then clear this terminal")
+		items = append(items, secret("private key", generatedPrivateKey))
+	}
+	p.pairs(items...)
+	if generatedPrivateKey != "" {
+		p.blank()
+		p.warn("transmit this private key securely to the node operator, then clear this terminal")
 	}
 	return nil
 }

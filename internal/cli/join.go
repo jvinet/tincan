@@ -58,13 +58,19 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 	if err := config.Save(g.Config, cfg); err != nil {
 		return err
 	}
-	fmt.Printf("initialized client node %q\n", c.Name)
-	fmt.Printf("config: %s\n", g.Config)
-	fmt.Printf("WireGuard public key: %s\n", publicKey)
+	p := newPrinter(os.Stdout)
+	p.headline("initialized client node %q", c.Name)
+	p.blank()
+	p.section("Paths")
+	p.pairs(kv("config", g.Config))
+	p.blank()
+	p.section("WireGuard")
+	p.pairs(kv("public key", publicKey))
+	p.blank()
 	if c.GenerateKey {
-		fmt.Println("send this public key to the admin so they can run `tincan add-node --pubkey ...`")
+		p.hint("Send this public key to the admin so they can run `tincan add-node --pubkey ...`")
 	}
-	fmt.Println("next steps: fill [directory] and [drop], then run `tincan sync`")
+	p.hint("Next steps: fill [directory] and [drop], then run `tincan sync`")
 	return nil
 }
 

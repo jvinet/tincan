@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/jvinet/tincan/internal/config"
 )
@@ -38,8 +39,11 @@ func (c *RemoveNodeCmd) Run(ctx context.Context, g *Globals) error {
 	if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
 		return err
 	}
-	fmt.Printf("removed node %q\n", c.Name)
-	fmt.Printf("freed IP: %s\n", node.TunnelIP)
-	fmt.Println("removed peers disappear from other nodes after their next sync")
+	p := newPrinter(os.Stdout)
+	p.headline("removed node %q", c.Name)
+	p.blank()
+	p.pairs(kv("freed IP", node.TunnelIP))
+	p.blank()
+	p.hint("Removed peers disappear from other nodes after their next sync")
 	return nil
 }

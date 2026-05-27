@@ -77,7 +77,7 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 	}
 	if state, err := cache.ReadState(cfg.Sync.Cache); err == nil {
 		out.Cache["last_sync"] = state.LastSync
-		out.Cache["age"] = time.Since(state.LastSync).String()
+		out.Cache["age"] = time.Since(state.LastSync).Truncate(time.Second).String()
 		out.Cache["etag"] = state.LastETag
 	}
 	if pid, err := daemon.ReadPID(cfg.Sync.PIDFile); err == nil {
@@ -158,22 +158,39 @@ func wireGuardPeerStatus(peers []wgtypes.Peer) []statusPeer {
 }
 
 func printStatusText(out statusOutput) {
-	fmt.Printf("node: %s\n", out.Name)
-	fmt.Printf("interface: %s\n", out.Interface)
+	p := newPrinter(os.Stdout)
+
+	p.section("Node")
+	nodePairs := []pair{
+		kv("name", out.Name),
+		kv("interface", out.Interface),
+	}
 	if out.TunnelIP != "" {
-		fmt.Printf("tunnel IP: %s\n", out.TunnelIP)
+		nodePairs = append(nodePairs, kv("tunnel IP", out.TunnelIP))
 	}
-	fmt.Printf("cache: %v\n", out.Cache)
-	fmt.Printf("daemon: %v\n", out.Daemon)
-	fmt.Printf("drop: %v\n", out.Drop)
-	fmt.Printf("wireguard: public_key=%v listen_port=%v type=%v peer_count=%v\n",
-		out.WireGuard["public_key"], out.WireGuard["listen_port"], out.WireGuard["type"], out.WireGuard["peer_count"])
-	if errText, ok := out.WireGuard["error"].(string); ok && errText != "" {
-		fmt.Printf("wireguard error: %s\n", errText)
-	}
+	p.pairs(nodePairs...)
+	p.blank()
+
+	p.section("Cache")
+	p.pairs(statusCachePairs(out.Cache)...)
+	p.blank()
+
+	p.section("Daemon")
+	p.pairs(statusDaemonPairs(out.Daemon)...)
+	p.blank()
+
+	p.section("Drop")
+	p.pairs(statusDropPairs(out.Drop)...)
+	p.blank()
+
+	p.section("WireGuard")
+	p.pairs(statusWireguardPairs(out.WireGuard)...)
+
 	if peers, ok := out.WireGuard["peers"].([]statusPeer); ok && len(peers) > 0 {
+		p.blank()
+		p.section("Peers")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "PEER\tENDPOINT\tALLOWED IPS\tLAST HANDSHAKE\tRX BYTES\tTX BYTES\tKEEPALIVE")
+		fmt.Fprintln(w, "  "+p.style(ansiDim, "PEER\tENDPOINT\tALLOWED IPS\tLAST HANDSHAKE\tRX\tTX\tKEEPALIVE"))
 		for _, peer := range peers {
 			handshake := "-"
 			if peer.LastHandshake != nil {
@@ -190,12 +207,93 @@ func printStatusText(out statusOutput) {
 			if keepalive == "" {
 				keepalive = "-"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%d\t%d\t%s\n",
 				peer.PublicKey, endpoint, strings.Join(peer.AllowedIPs, ","), handshake, peer.ReceiveBytes, peer.TransmitBytes, keepalive)
 		}
 		_ = w.Flush()
 	}
 	if out.NATWarning != "" {
-		fmt.Printf("warning: %s\n", out.NATWarning)
+		p.blank()
+		p.warn("%s", out.NATWarning)
 	}
+}
+
+func statusCachePairs(m map[string]interface{}) []pair {
+	pairs := []pair{}
+	if v, ok := m["serial"].(uint64); ok {
+		pairs = append(pairs, kv("serial", fmt.Sprintf("%d", v)))
+	}
+	if v, ok := m["path"].(string); ok && v != "" {
+		pairs = append(pairs, kv("path", v))
+	}
+	if v, ok := m["last_sync"].(time.Time); ok {
+		pairs = append(pairs, kv("last sync", v.Format(time.RFC3339)))
+	}
+	if v, ok := m["age"].(string); ok && v != "" {
+		pairs = append(pairs, kv("age", v))
+	}
+	if v, ok := m["etag"].(string); ok && v != "" {
+		pairs = append(pairs, kv("etag", v))
+	}
+	if v, ok := m["error"].(string); ok && v != "" {
+		pairs = append(pairs, kv("error", v))
+	}
+	return pairs
+}
+
+func statusDaemonPairs(m map[string]interface{}) []pair {
+	pairs := []pair{}
+	if v, ok := m["pid"].(int); ok {
+		pairs = append(pairs, kv("pid", fmt.Sprintf("%d", v)))
+	}
+	if v, ok := m["alive"].(bool); ok {
+		pairs = append(pairs, kv("alive", fmt.Sprintf("%t", v)))
+	}
+	if v, ok := m["error"].(string); ok && v != "" {
+		pairs = append(pairs, kv("error", v))
+	}
+	return pairs
+}
+
+func statusDropPairs(m map[string]interface{}) []pair {
+	pairs := []pair{}
+	if v, ok := m["name"].(string); ok && v != "" {
+		pairs = append(pairs, kv("name", v))
+	}
+	if v, ok := m["reachable"].(bool); ok {
+		pairs = append(pairs, kv("reachable", fmt.Sprintf("%t", v)))
+	}
+	if v, ok := m["size"].(int64); ok {
+		pairs = append(pairs, kv("size", fmt.Sprintf("%d bytes", v)))
+	}
+	if v, ok := m["updated_at"].(time.Time); ok {
+		pairs = append(pairs, kv("updated at", v.Format(time.RFC3339)))
+	}
+	if v, ok := m["etag"].(string); ok && v != "" {
+		pairs = append(pairs, kv("etag", v))
+	}
+	if v, ok := m["error"].(string); ok && v != "" {
+		pairs = append(pairs, kv("error", v))
+	}
+	return pairs
+}
+
+func statusWireguardPairs(m map[string]interface{}) []pair {
+	pairs := []pair{}
+	if v, ok := m["public_key"].(string); ok && v != "" {
+		pairs = append(pairs, kv("public key", v))
+	}
+	if v, ok := m["listen_port"].(int); ok {
+		pairs = append(pairs, kv("listen port", fmt.Sprintf("%d", v)))
+	}
+	if v, ok := m["type"].(string); ok && v != "" {
+		pairs = append(pairs, kv("type", v))
+	}
+	if v, ok := m["peer_count"].(int); ok {
+		pairs = append(pairs, kv("peer count", fmt.Sprintf("%d", v)))
+	}
+	if v, ok := m["error"].(string); ok && v != "" {
+		pairs = append(pairs, kv("error", v))
+	}
+	return pairs
 }

@@ -39,7 +39,10 @@ func (c *SyncCmd) Run(ctx context.Context, g *Globals) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("started tincan daemon with PID %d\n", pid)
+		p := newPrinter(os.Stdout)
+		p.headline("started tincan daemon")
+		p.blank()
+		p.pairs(kv("pid", fmt.Sprintf("%d", pid)))
 		return nil
 	}
 	if c.Daemon && daemon.IsChild() {
@@ -53,7 +56,19 @@ func (c *SyncCmd) Run(ctx context.Context, g *Globals) error {
 		defer pidFile.CloseRemove()
 		return runDaemonLoop(ctx, g.Config)
 	}
-	return runSyncOnce(ctx, cfg, 30*time.Second)
+	res, err := runSyncOnce(ctx, cfg, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	p := newPrinter(os.Stdout)
+	source := "drop"
+	if res.FromCache {
+		source = "local cache"
+	}
+	p.headline("synced from %s", source)
+	p.blank()
+	p.pairs(kv("serial", fmt.Sprintf("%d", res.Serial)))
+	return nil
 }
 
 func runDaemonLoop(ctx context.Context, configPath string) error {
@@ -66,8 +81,12 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			slog.Error("failed to load config", "error", err)
 		} else {
 			timeout := iterationTimeout(cfg.Sync.Interval.Or(config.DefaultInterval))
-			if err := runSyncOnce(ctx, cfg, timeout); err != nil {
+			if res, err := runSyncOnce(ctx, cfg, timeout); err != nil {
 				slog.Error("sync iteration failed", "error", err)
+			} else if res.FromCache {
+				slog.Info("synced from local cache", "serial", res.Serial)
+			} else {
+				slog.Info("synced from drop", "serial", res.Serial)
 			}
 		}
 		interval := config.DefaultInterval
@@ -109,35 +128,35 @@ func iterationTimeout(interval time.Duration) time.Duration {
 	return t
 }
 
-func runSyncOnce(ctx context.Context, cfg *config.Config, timeout time.Duration) error {
+type syncResult struct {
+	Serial    uint64
+	FromCache bool
+}
+
+func runSyncOnce(ctx context.Context, cfg *config.Config, timeout time.Duration) (syncResult, error) {
 	d, err := loadDrop(cfg)
 	if err != nil {
-		return err
+		return syncResult{}, err
 	}
 	dir, fromCache, err := fetchSyncDirectory(ctx, cfg, d, timeout)
 	if err != nil {
-		return err
+		return syncResult{}, err
 	}
 	self, err := findSelf(cfg, dir)
 	if err != nil {
-		return err
+		return syncResult{}, err
 	}
 	manager, err := wg.NewManager(cfg.Wireguard)
 	if err != nil {
-		return err
+		return syncResult{}, err
 	}
 	if err := manager.Ensure(self, dir); err != nil {
-		return err
+		return syncResult{}, err
 	}
 	if err := cache.Write(cfg.Sync.Cache, dir, ""); err != nil {
-		return err
+		return syncResult{}, err
 	}
-	if fromCache {
-		slog.Info("synced from local cache", "serial", dir.Serial)
-	} else {
-		slog.Info("synced from drop", "serial", dir.Serial)
-	}
-	return nil
+	return syncResult{Serial: dir.Serial, FromCache: fromCache}, nil
 }
 
 func fetchSyncDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, timeout time.Duration) (directory.Directory, bool, error) {

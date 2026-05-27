@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jvinet/tincan/internal/cache"
@@ -84,16 +85,36 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	if err := config.Save(g.Config, cfg); err != nil {
 		return err
 	}
-	fmt.Printf("initialized admin node %q\n", c.Name)
-	fmt.Printf("config: %s\n", g.Config)
-	fmt.Printf("working directory: %s\n", config.SourcePath(cfg.Sync.Cache))
-	fmt.Printf("allocated IP: %s\n", tunnelIP)
-	fmt.Printf("WireGuard public key: %s\n", wgPub)
-	fmt.Printf("WireGuard private key: %s\n", wgPriv)
-	fmt.Printf("age identity: %s\n", networkIdentity)
-	fmt.Printf("age recipient: %s\n", networkRecipient)
-	fmt.Printf("publisher public key: %s\n", publisherPub)
-	fmt.Printf("publisher private key: %s\n", publisherPriv)
-	fmt.Println("next steps: edit the [drop] section, then run `tincan publish`")
+	p := newPrinter(os.Stdout)
+	p.headline("initialized admin node %q", c.Name)
+	p.blank()
+	p.section("Paths")
+	p.pairs(
+		kv("config", g.Config),
+		kv("working directory", config.SourcePath(cfg.Sync.Cache)),
+	)
+	p.blank()
+	p.section("Tunnel")
+	p.pairs(kv("allocated IP", tunnelIP))
+	p.blank()
+	p.section("WireGuard keypair")
+	p.pairs(
+		kv("public key", wgPub),
+		secret("private key", wgPriv),
+	)
+	p.blank()
+	p.section("Network identity (age)")
+	p.pairs(
+		secret("identity", networkIdentity),
+		kv("recipient", networkRecipient),
+	)
+	p.blank()
+	p.section("Publisher keypair")
+	p.pairs(
+		kv("public key", publisherPub),
+		secret("private key", publisherPriv),
+	)
+	p.blank()
+	p.hint("Next steps: edit the [drop] section, then run `tincan publish`")
 	return nil
 }

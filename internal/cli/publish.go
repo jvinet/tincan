@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
@@ -39,6 +40,9 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	if err := publishDirectory(ctx, cfg, d, source, true); err != nil {
 		return err
 	}
-	fmt.Printf("published directory serial %d\n", source.Serial)
+	p := newPrinter(os.Stdout)
+	p.headline("published directory")
+	p.blank()
+	p.pairs(kv("serial", fmt.Sprintf("%d", source.Serial)))
 	return nil
 }

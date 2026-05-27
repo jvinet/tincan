@@ -22,16 +22,27 @@ func (c *ListNodesCmd) Run(ctx context.Context, g *Globals) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("serial: %d\n", dir.Serial)
-	fmt.Printf("network: %s\n", dir.NetworkCIDR)
+	p := newPrinter(os.Stdout)
+	p.section("Directory")
+	p.pairs(
+		kv("serial", fmt.Sprintf("%d", dir.Serial)),
+		kv("network", dir.NetworkCIDR),
+		kv("nodes", fmt.Sprintf("%d", len(dir.Nodes))),
+	)
+	p.blank()
+	p.section("Nodes")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tIP\tPUBLIC KEY\tENDPOINT")
+	fmt.Fprintln(w, "  "+p.style(ansiDim, "NAME\tIP\tPUBLIC KEY\tENDPOINT"))
 	for _, node := range dir.Nodes {
 		pub := node.PublicKey
 		if len(pub) > 12 {
 			pub = pub[:12] + "..."
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", node.Name, node.TunnelIP, pub, node.Endpoint)
+		endpoint := node.Endpoint
+		if endpoint == "" {
+			endpoint = "-"
+		}
+		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", node.Name, node.TunnelIP, pub, endpoint)
 	}
 	return w.Flush()
 }
