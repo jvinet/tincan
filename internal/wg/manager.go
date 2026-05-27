@@ -39,10 +39,21 @@ func NewManager(cfg config.WireguardConfig) (*Manager, error) {
 	return &Manager{iface: cfg.Interface, privateKey: priv, listenPort: listenPort, mtu: cfg.MTU, wg: cfg}, nil
 }
 
-func (m *Manager) Ensure(self directory.Node, dir directory.Directory) error {
+func (m *Manager) Up() error {
 	link, err := m.ensureLink()
 	if err != nil {
 		return err
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		return fmt.Errorf("set link up: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) Apply(self directory.Node, dir directory.Directory) error {
+	link, err := netlink.LinkByName(m.iface)
+	if err != nil {
+		return fmt.Errorf("find link %q: %w", m.iface, err)
 	}
 	peers, err := BuildPeerConfigs(m.wg, self, dir)
 	if err != nil {
@@ -67,10 +78,14 @@ func (m *Manager) Ensure(self directory.Node, dir directory.Directory) error {
 	if err := ensureRoute(link, dir.NetworkCIDR); err != nil {
 		return err
 	}
-	if err := netlink.LinkSetUp(link); err != nil {
-		return fmt.Errorf("set link up: %w", err)
-	}
 	return nil
+}
+
+func (m *Manager) Ensure(self directory.Node, dir directory.Directory) error {
+	if err := m.Up(); err != nil {
+		return err
+	}
+	return m.Apply(self, dir)
 }
 
 func (m *Manager) Teardown() error {

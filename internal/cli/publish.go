@@ -41,8 +41,6 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 		return err
 	}
 	p := newPrinter(os.Stdout)
-	p.headline("published directory")
-	p.blank()
-	p.pairs(kv("serial", fmt.Sprintf("%d", source.Serial)))
+	p.headline("published directory (serial: %d)", source.Serial)
 	return nil
 }

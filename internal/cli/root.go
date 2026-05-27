@@ -26,7 +26,9 @@ type App struct {
 	RemoveNode RemoveNodeCmd `cmd:"" name:"remove-node" help:"Remove a node from the directory."`
 	ListNodes  ListNodesCmd  `cmd:"" name:"list-nodes" help:"List nodes in the directory."`
 	Publish    PublishCmd    `cmd:"" help:"Publish the admin working directory."`
-	Sync       SyncCmd       `cmd:"" help:"Sync WireGuard state from the directory."`
+	Sync       SyncCmd       `cmd:"" help:"Fetch the latest directory from the dead-drop."`
+	Up         UpCmd         `cmd:"" help:"Bring the WireGuard interface up and apply the directory."`
+	Down       DownCmd       `cmd:"" help:"Tear down the WireGuard interface."`
 	Status     StatusCmd     `cmd:"" help:"Show local Tincan status."`
 	Version    VersionCmd    `cmd:"" help:"Print version information."`
 }

@@ -32,7 +32,8 @@ older than the one they already cached, which protects against rollback.
   clients), and local filesystem (e.g. shared NFS/SMB mount)
 - Signed (Ed25519) and age-encrypted directory blobs
 - Full-mesh WireGuard peer configuration via `wgctrl`/netlink (no `wg-quick`)
-- One-shot and daemonized sync, with SIGHUP-triggered reload
+- Explicit `up` / `down` / `sync` lifecycle, plus a daemon mode that reconciles
+  continuously with SIGHUP-triggered reload
 - Local cache + serial file so the network stays up if the dead-drop is
   temporarily unreachable
 
@@ -40,7 +41,7 @@ older than the one they already cached, which protects against rollback.
 
 - Linux with the `wireguard` kernel module (or `wireguard-go`) available
 - `CAP_NET_ADMIN` to manage the tunnel interface — in practice, run
-  `tincan sync` as root or under a systemd unit with the capability granted
+  `tincan up` as root or under a systemd unit with the capability granted
 - Go 1.24+ to build from source
 
 ## Build
@@ -141,12 +142,21 @@ Edit the config and fill in:
 - `[drop]` — the same backend coordinates the admin used (read-only credentials
   are fine for clients)
 
-Then sync:
+Then bring the tunnel up:
 
 ```sh
-sudo tincan sync           # one-shot, exits after applying the directory
-sudo tincan sync --daemon  # fork into background, poll periodically
-sudo tincan sync --once    # alias for one-shot, useful from cron
+sudo tincan up             # sync from the drop, then create tincan0 and apply peers
+sudo tincan up --no-sync   # apply the cached directory without contacting the drop
+sudo tincan up --daemon    # fork into background, continuously sync and apply
+```
+
+`sync` and `up` are split so you can refresh the local cache without touching
+the interface:
+
+```sh
+sudo tincan sync           # fetch the latest directory and cache it
+sudo tincan up --no-sync   # apply that cache to the interface
+sudo tincan down           # tear the interface down
 ```
 
 ### 4. Verify
@@ -161,25 +171,25 @@ ages. `--json` emits the same data as JSON.
 
 ## Running as a daemon
 
-`tincan sync --daemon` double-forks into the background, writes a PID file
-(default `/run/tincan.pid`), and polls the dead-drop on `[sync].interval`
-(default `5m`).
+`tincan up --daemon` double-forks into the background, writes a PID file
+(default `/run/tincan.pid`), and reconciles every `[sync].interval`
+(default `5m`) by syncing from the drop and re-applying the directory.
 
 Signals the daemon understands:
 
-- `SIGHUP` — reload `config.toml` and run a sync iteration immediately
+- `SIGHUP` — reload `config.toml` and run an iteration immediately
 - `SIGTERM` / `SIGINT` — clean shutdown
 
 For systemd, prefer a plain service rather than `--daemon`:
 
 ```ini
 [Unit]
-Description=Tincan sync
+Description=Tincan
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/tincan sync
+ExecStart=/usr/local/bin/tincan up
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10
