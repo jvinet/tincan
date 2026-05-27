@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 )
 
 type RemoveNodeCmd struct {
-	Name string `required:"" help:"Node name to remove."`
+	Name      string `required:"" help:"Node name to remove."`
+	NoPublish bool   `name:"no-publish" help:"Save changes to the working directory without publishing to the drop."`
 }
 
 func (c *RemoveNodeCmd) Run(ctx context.Context, g *Globals) error {
@@ -33,17 +35,27 @@ func (c *RemoveNodeCmd) Run(ctx context.Context, g *Globals) error {
 		return fmt.Errorf("node %q not found", c.Name)
 	}
 	dir.Nodes = append(dir.Nodes[:idx], dir.Nodes[idx+1:]...)
-	if err := bumpDirectory(&dir); err != nil {
-		return err
-	}
-	if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
-		return err
+	if c.NoPublish {
+		if err := cache.WriteSource(cfg.Sync.Cache, dir); err != nil {
+			return err
+		}
+	} else {
+		if err := bumpDirectory(&dir); err != nil {
+			return err
+		}
+		if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
+			return err
+		}
 	}
 	p := newPrinter(os.Stdout)
 	p.headline("removed node %q", c.Name)
 	p.blank()
 	p.pairs(kv("freed IP", node.TunnelIP))
 	p.blank()
-	p.hint("Removed peers disappear from other nodes after their next sync")
+	if c.NoPublish {
+		p.hint("Changes saved locally; run `tincan publish` to upload to the drop")
+	} else {
+		p.hint("Removed peers disappear from other nodes after their next sync")
+	}
 	return nil
 }

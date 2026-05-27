@@ -130,8 +130,9 @@ sudo tincan remove-node --name bob
 sudo tincan publish           # re-publish the working directory
 ```
 
-`add-node` and `remove-node` publish automatically; `publish` is for re-issuing
-after editing the working directory by hand or to recover from a partial upload.
+`add-node` and `remove-node` publish automatically; pass `--no-publish` to defer
+the upload (changes are saved to the working directory). `publish` is for
+re-issuing after deferred edits or to recover from a partial upload.
 
 ### 3. Bring up a client node
 

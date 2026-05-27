@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
+	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
 	"github.com/jvinet/tincan/internal/keys"
@@ -16,6 +17,7 @@ type AddNodeCmd struct {
 	PubKey    string `help:"Existing WireGuard public key for the node."`
 	Endpoint  string `help:"Published endpoint for the node, as host:port."`
 	Bootstrap string `type:"path" help:"Write a node bootstrap JSON file at this path."`
+	NoPublish bool   `name:"no-publish" help:"Save changes to the working directory without publishing to the drop."`
 }
 
 func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
@@ -59,11 +61,17 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		return err
 	}
 	dir.Nodes = append(dir.Nodes, directory.Node{Name: c.Name, PublicKey: publicKey, TunnelIP: tunnelIP, Endpoint: c.Endpoint})
-	if err := bumpDirectory(&dir); err != nil {
-		return err
-	}
-	if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
-		return err
+	if c.NoPublish {
+		if err := cache.WriteSource(cfg.Sync.Cache, dir); err != nil {
+			return err
+		}
+	} else {
+		if err := bumpDirectory(&dir); err != nil {
+			return err
+		}
+		if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
+			return err
+		}
 	}
 	if c.Bootstrap != "" {
 		node := bootstrap.Node{
@@ -100,6 +108,10 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		} else {
 			p.warn("transmit this private key securely to the node operator, then clear this terminal")
 		}
+	}
+	if c.NoPublish {
+		p.blank()
+		p.hint("Changes saved locally; run `tincan publish` to upload to the drop")
 	}
 	return nil
 }
