@@ -36,14 +36,15 @@ func Start(pidFile string, configPath string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("start daemon child: %w", err)
 	}
-	if err := pf.Write(proc.Pid); err != nil {
+	pid := proc.Pid
+	if err := pf.Write(pid); err != nil {
 		_ = proc.Kill()
 		return 0, err
 	}
 	if err := proc.Release(); err != nil {
 		return 0, fmt.Errorf("release daemon child: %w", err)
 	}
-	return proc.Pid, nil
+	return pid, nil
 }
 
 func BecomeChild() error {

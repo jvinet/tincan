@@ -36,9 +36,7 @@ func (c *UpCmd) Run(ctx context.Context, g *Globals) error {
 			return err
 		}
 		p := newPrinter(os.Stdout)
-		p.headline("started tincan daemon")
-		p.blank()
-		p.pairs(kv("pid", fmt.Sprintf("%d", pid)))
+		p.headline("started tincan daemon (pid: %d)", pid)
 		return nil
 	}
 	if c.Daemon && daemon.IsChild() {
