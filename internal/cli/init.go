@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jvinet/tincan/internal/admin"
 	"github.com/jvinet/tincan/internal/bootstrap"
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
@@ -68,6 +69,10 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 		PublisherKey:    publisherPriv,
 	}
 	cfg.Drop = config.SkeletonDrop(c.DropType)
+	cfg.Observe = config.ObserveConfig{
+		HandshakeFresh:  config.NewDuration(admin.DefaultHandshakeFresh),
+		RefreshInterval: config.NewDuration(admin.DefaultRefreshInterval),
+	}
 	dir := directory.Directory{
 		SchemaVersion: directory.SchemaVersion,
 		Serial:        1,
@@ -122,5 +127,6 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	)
 	p.blank()
 	p.hint("Next steps: edit the [drop.admin] and [drop.client] sections, then run `tincan publish`")
+	p.hint("To let NAT'd peers discover each other's endpoints, set [observe].enabled = true on this admin node")
 	return nil
 }

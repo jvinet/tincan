@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jvinet/tincan/internal/admin"
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/daemon"
@@ -162,7 +163,50 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if err != nil {
 		return err
 	}
-	return manager.Ensure(self, res.Directory)
+	if err := manager.Ensure(self, res.Directory); err != nil {
+		return err
+	}
+	if cfg.Observe.Enabled {
+		if err := runAdminObservation(ctx, cfg, manager, res.Serial, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Manager, syncedSerial uint64, p *printer) error {
+	if err := config.RequireAdmin(*cfg); err != nil {
+		return fmt.Errorf("[observe].enabled requires admin role: %w", err)
+	}
+	source, err := cache.ReadSource(cfg.Sync.Cache)
+	if err != nil {
+		return fmt.Errorf("read source directory: %w", err)
+	}
+	if syncedSerial > source.Serial {
+		source.Serial = syncedSerial
+	}
+	peers, err := manager.Peers()
+	if err != nil {
+		return err
+	}
+	handshakeFresh := cfg.Observe.HandshakeFresh.Or(admin.DefaultHandshakeFresh)
+	refreshInterval := cfg.Observe.RefreshInterval.Or(admin.DefaultRefreshInterval)
+	updated, changed := admin.MergeObservations(source, peers, time.Now(), handshakeFresh, refreshInterval)
+	if !changed {
+		return nil
+	}
+	if err := bumpDirectory(&updated); err != nil {
+		return err
+	}
+	d, err := loadAdminDrop(cfg)
+	if err != nil {
+		return err
+	}
+	if err := publishDirectory(ctx, cfg, d, updated, true); err != nil {
+		return err
+	}
+	p.headline("republished after endpoint observation (serial: %d)", updated.Serial)
+	return nil
 }
 
 func iterationTimeout(interval time.Duration) time.Duration {

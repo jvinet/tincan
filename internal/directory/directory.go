@@ -13,11 +13,13 @@ type Directory struct {
 }
 
 type Node struct {
-	Name      string `msgpack:"n"`
-	PublicKey string `msgpack:"pk"`
-	TunnelIP  string `msgpack:"ip"`
-	Endpoint  string `msgpack:"ep,omitempty"`
-	PSK       string `msgpack:"psk,omitempty"`
+	Name             string    `msgpack:"n"`
+	PublicKey        string    `msgpack:"pk"`
+	TunnelIP         string    `msgpack:"ip"`
+	Endpoint         string    `msgpack:"ep,omitempty"`
+	ObservedEndpoint string    `msgpack:"oep,omitempty"`
+	ObservedAt       time.Time `msgpack:"oat,omitempty"`
+	PSK              string    `msgpack:"psk,omitempty"`
 }
 
 type Envelope struct {

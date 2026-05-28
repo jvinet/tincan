@@ -25,7 +25,7 @@ func sampleDirectory(t *testing.T) Directory {
 		NetworkCIDR:   "10.42.0.0/24",
 		Nodes: []Node{
 			{Name: "alice", PublicKey: alicePub, TunnelIP: "10.42.0.1", Endpoint: "alice.example.com:51820"},
-			{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2"},
+			{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2", ObservedEndpoint: "203.0.113.7:41234", ObservedAt: time.Date(2026, 5, 25, 9, 59, 0, 0, time.UTC)},
 		},
 	}
 }
@@ -65,7 +65,13 @@ func TestSealOpenRoundTrip(t *testing.T) {
 		t.Fatalf("CreatedAt mismatch: got %s want %s", opened.CreatedAt, dir.CreatedAt)
 	}
 	for i := range dir.Nodes {
-		if opened.Nodes[i] != dir.Nodes[i] {
+		want := dir.Nodes[i]
+		got := opened.Nodes[i]
+		if !got.ObservedAt.Equal(want.ObservedAt) {
+			t.Fatalf("node %d ObservedAt mismatch: got %s want %s", i, got.ObservedAt, want.ObservedAt)
+		}
+		got.ObservedAt = want.ObservedAt
+		if got != want {
 			t.Fatalf("node %d mismatch: got %+v want %+v", i, opened.Nodes[i], dir.Nodes[i])
 		}
 	}

@@ -37,6 +37,9 @@ older than the one they already cached, which protects against rollback.
 - Network and node bootstrap files for one-shot client onboarding
 - Local cache + serial file so the network stays up if the dead-drop is
   temporarily unreachable
+- Optional endpoint discovery: an admin node can observe NAT'd peers'
+  source endpoints and republish them so NAT'd peers can reach each other
+  directly (UDP hole punching). See [Endpoint discovery](#endpoint-discovery).
 
 ## Requirements
 
@@ -228,6 +231,42 @@ Drop `--daemon` so the unit runs in the foreground and systemd owns the process.
 (The unit above runs a single iteration and exits; switch to a `oneshot` service
 with a systemd timer if you'd rather schedule it externally.)
 
+## Endpoint discovery
+
+By default a NAT'd node can only reach peers whose `Endpoint` is set in the
+directory (typically public hosts). Two NAT'd peers can't reach each other,
+because neither has an address the other can dial.
+
+When `[observe].enabled = true` on an admin node, that admin watches its
+WireGuard interface for inbound handshakes from NAT'd peers, records each
+peer's apparent source `ip:port`, and republishes the directory with those
+observations attached to each node. Other peers pick up the observation on
+their next sync and write it into their local WireGuard config; the standard
+25-second keepalive on NAT'd nodes holds the NAT mapping open long enough for
+the peer-to-peer handshake to complete (UDP hole punching).
+
+To enable:
+
+```toml
+[observe]
+enabled = true
+```
+
+The admin must already be a daemon (`tincan up --daemon` or under systemd) so
+that observation runs each `[sync].interval`. No client-side configuration is
+required — clients automatically prefer an operator-configured `Endpoint`,
+then fall back to the admin's observation.
+
+Hole punching works for most consumer NATs (full-cone, restricted-cone,
+port-restricted). It does **not** work for symmetric NAT (some carrier-grade
+NAT, some corporate firewalls) — the admin's observed port differs from the
+port the peer would have to use to reach you. For those, an admin-as-relay
+fallback is the only option (not yet implemented).
+
+Two peers behind the same residential router are also a known weak spot:
+they share the same observed public IP and require the router to hairpin UDP
+traffic back inside the LAN, which many consumer routers don't do reliably.
+
 ## Dead-drop backends
 
 Every config has two drop sections: `[drop.admin]` is how this node writes the
@@ -323,6 +362,11 @@ type = "s3"
 interval = "5m"                # daemon poll interval
 cache    = "/var/lib/tincan/cache.bin"
 pid_file = "/run/tincan.pid"
+
+[observe]                      # admin-only; see Endpoint discovery
+enabled          = false       # default off; flip to true to discover NAT'd peer endpoints
+handshake_fresh  = "3m"        # how recent a peer handshake must be to count as observed
+refresh_interval = "15m"       # how often to refresh ObservedAt for unchanged endpoints
 ```
 
 Defaults are populated automatically; you usually only need to set

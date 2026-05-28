@@ -13,6 +13,8 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
+const ObservedEndpointTTL = 30 * time.Minute
+
 func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir directory.Directory) ([]wgtypes.PeerConfig, error) {
 	selfHasEndpoint := self.Endpoint != ""
 	keepalive := time.Duration(0)
@@ -39,10 +41,11 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 			ReplaceAllowedIPs: true,
 			AllowedIPs:        []net.IPNet{*allowedIP},
 		}
-		if node.Endpoint != "" {
-			endpoint, err := net.ResolveUDPAddr("udp", node.Endpoint)
+		endpointStr := chooseEndpoint(node, time.Now())
+		if endpointStr != "" {
+			endpoint, err := net.ResolveUDPAddr("udp", endpointStr)
 			if err != nil {
-				return nil, fmt.Errorf("resolve peer %q endpoint %q: %w", node.Name, node.Endpoint, err)
+				return nil, fmt.Errorf("resolve peer %q endpoint %q: %w", node.Name, endpointStr, err)
 			}
 			peer.Endpoint = endpoint
 		}
@@ -53,4 +56,17 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 		peers = append(peers, peer)
 	}
 	return peers, nil
+}
+
+func chooseEndpoint(node directory.Node, now time.Time) string {
+	if node.Endpoint != "" {
+		return node.Endpoint
+	}
+	if node.ObservedEndpoint == "" || node.ObservedAt.IsZero() {
+		return ""
+	}
+	if now.Sub(node.ObservedAt) > ObservedEndpointTTL {
+		return ""
+	}
+	return node.ObservedEndpoint
 }

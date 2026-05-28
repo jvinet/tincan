@@ -88,6 +88,19 @@ func (m *Manager) Ensure(self directory.Node, dir directory.Directory) error {
 	return m.Apply(self, dir)
 }
 
+func (m *Manager) Peers() ([]wgtypes.Peer, error) {
+	client, err := wgctrl.New()
+	if err != nil {
+		return nil, fmt.Errorf("open wgctrl: %w", err)
+	}
+	defer client.Close()
+	dev, err := client.Device(m.iface)
+	if err != nil {
+		return nil, fmt.Errorf("read wireguard device: %w", err)
+	}
+	return dev.Peers, nil
+}
+
 func (m *Manager) Teardown() error {
 	link, err := netlink.LinkByName(m.iface)
 	if err != nil {

@@ -22,6 +22,7 @@ type Config struct {
 	Directory DirectoryConfig `toml:"directory"`
 	Drop      DropConfig      `toml:"drop"`
 	Sync      SyncConfig      `toml:"sync"`
+	Observe   ObserveConfig   `toml:"observe,omitempty"`
 }
 
 type WireguardConfig struct {
@@ -74,6 +75,12 @@ type SyncConfig struct {
 	Interval OptionalDuration `toml:"interval,omitempty"`
 	Cache    string           `toml:"cache,omitempty"`
 	PIDFile  string           `toml:"pid_file,omitempty"`
+}
+
+type ObserveConfig struct {
+	Enabled         bool             `toml:"enabled,omitempty"`
+	HandshakeFresh  OptionalDuration `toml:"handshake_fresh,omitempty"`
+	RefreshInterval OptionalDuration `toml:"refresh_interval,omitempty"`
 }
 
 type OptionalDuration struct {

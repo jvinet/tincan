@@ -152,6 +152,101 @@ func TestBuildPeerConfigsRejectsBadPeerData(t *testing.T) {
 	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir); err == nil {
 		t.Fatal("expected invalid endpoint error")
 	}
+
+	self, dir = peerFixture(t)
+	dir.Nodes[2].Endpoint = ""
+	dir.Nodes[2].ObservedEndpoint = "not-a-host-port"
+	dir.Nodes[2].ObservedAt = time.Now()
+	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir); err == nil {
+		t.Fatal("expected invalid observed endpoint error")
+	}
+}
+
+func TestChooseEndpoint(t *testing.T) {
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	fresh := now.Add(-ObservedEndpointTTL / 2)
+	stale := now.Add(-ObservedEndpointTTL - time.Second)
+
+	cases := []struct {
+		name string
+		node directory.Node
+		want string
+	}{
+		{
+			name: "configured wins over observed",
+			node: directory.Node{Endpoint: "host:1234", ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			want: "host:1234",
+		},
+		{
+			name: "observed used when configured empty and fresh",
+			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			want: "203.0.113.7:5555",
+		},
+		{
+			name: "observed ignored when stale",
+			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555", ObservedAt: stale},
+			want: "",
+		},
+		{
+			name: "observed ignored when ObservedAt zero",
+			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555"},
+			want: "",
+		},
+		{
+			name: "no observed endpoint",
+			node: directory.Node{},
+			want: "",
+		},
+		{
+			name: "observed fresh at exact TTL boundary",
+			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555", ObservedAt: now.Add(-ObservedEndpointTTL)},
+			want: "203.0.113.7:5555",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := chooseEndpoint(tc.node, now)
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildPeerConfigsAppliesObservedEndpoint(t *testing.T) {
+	self, dir := peerFixture(t)
+	dir.Nodes[2].Endpoint = ""
+	dir.Nodes[2].ObservedEndpoint = "127.0.0.1:51900"
+	dir.Nodes[2].ObservedAt = time.Now()
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carol := peerByAllowedIP(peers, "10.42.0.3")
+	if carol == nil || carol.Endpoint == nil {
+		t.Fatalf("carol endpoint missing: %+v", carol)
+	}
+	if !carol.Endpoint.IP.Equal(net.ParseIP("127.0.0.1")) || carol.Endpoint.Port != 51900 {
+		t.Fatalf("carol endpoint=%v", carol.Endpoint)
+	}
+}
+
+func TestBuildPeerConfigsIgnoresStaleObservedEndpoint(t *testing.T) {
+	self, dir := peerFixture(t)
+	dir.Nodes[2].Endpoint = ""
+	dir.Nodes[2].ObservedEndpoint = "127.0.0.1:51900"
+	dir.Nodes[2].ObservedAt = time.Now().Add(-ObservedEndpointTTL - time.Minute)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carol := peerByAllowedIP(peers, "10.42.0.3")
+	if carol == nil {
+		t.Fatal("carol peer missing")
+	}
+	if carol.Endpoint != nil {
+		t.Fatalf("stale observed endpoint should be ignored, got %v", carol.Endpoint)
+	}
 }
 
 func TestBuildPeerConfigsKeepaliveAndAllowedIPs(t *testing.T) {

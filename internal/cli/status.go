@@ -11,6 +11,7 @@ import (
 
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/daemon"
+	"github.com/jvinet/tincan/internal/directory"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
@@ -32,7 +33,11 @@ type statusOutput struct {
 
 type statusPeer struct {
 	PublicKey           string     `json:"public_key"`
+	Name                string     `json:"name,omitempty"`
 	Endpoint            string     `json:"endpoint,omitempty"`
+	DirectoryEndpoint   string     `json:"directory_endpoint,omitempty"`
+	ObservedEndpoint    string     `json:"observed_endpoint,omitempty"`
+	ObservedAt          *time.Time `json:"observed_at,omitempty"`
 	AllowedIPs          []string   `json:"allowed_ips"`
 	LastHandshake       *time.Time `json:"last_handshake,omitempty"`
 	LastHandshakeAge    string     `json:"last_handshake_age,omitempty"`
@@ -54,21 +59,28 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		Drop:      map[string]interface{}{},
 		WireGuard: map[string]interface{}{},
 	}
+	nodesByPubkey := map[string]directory.Node{}
 	if dir, _, err := cache.Read(cfg.Sync.Cache); err == nil {
 		out.Cache["serial"] = dir.Serial
 		out.Cache["path"] = cfg.Sync.Cache
+		for _, node := range dir.Nodes {
+			nodesByPubkey[node.PublicKey] = node
+		}
 		if self, err := findSelf(cfg, dir); err == nil {
 			out.TunnelIP = self.TunnelIP
 			if self.Endpoint == "" {
-				allPeersNAT := true
+				anyPeerReachable := false
 				for _, node := range dir.Nodes {
-					if node.PublicKey != self.PublicKey && node.Endpoint != "" {
-						allPeersNAT = false
+					if node.PublicKey == self.PublicKey {
+						continue
+					}
+					if node.Endpoint != "" || node.ObservedEndpoint != "" {
+						anyPeerReachable = true
 						break
 					}
 				}
-				if allPeersNAT && len(dir.Nodes) > 1 {
-					out.NATWarning = "self and all peers lack endpoints; pure NAT-to-NAT cannot form a mesh without a relay"
+				if !anyPeerReachable && len(dir.Nodes) > 1 {
+					out.NATWarning = "self and all peers lack endpoints; enable [observe] on the admin or add a relay"
 				}
 			}
 		}
@@ -111,7 +123,7 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 			out.WireGuard["public_key"] = dev.PublicKey.String()
 			out.WireGuard["listen_port"] = dev.ListenPort
 			out.WireGuard["peer_count"] = len(dev.Peers)
-			out.WireGuard["peers"] = wireGuardPeerStatus(dev.Peers)
+			out.WireGuard["peers"] = wireGuardPeerStatus(dev.Peers, nodesByPubkey)
 			out.WireGuard["type"] = dev.Type.String()
 		} else {
 			out.WireGuard["error"] = devErr.Error()
@@ -128,18 +140,55 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 	return nil
 }
 
-func wireGuardPeerStatus(peers []wgtypes.Peer) []statusPeer {
+func peerLabel(peer statusPeer) string {
+	if peer.Name != "" {
+		return peer.Name
+	}
+	if len(peer.PublicKey) > 12 {
+		return peer.PublicKey[:8] + "…"
+	}
+	return peer.PublicKey
+}
+
+func peerEndpointLabel(peer statusPeer) string {
+	if peer.Endpoint != "" {
+		return peer.Endpoint
+	}
+	if peer.DirectoryEndpoint != "" {
+		return peer.DirectoryEndpoint + " (configured)"
+	}
+	if peer.ObservedEndpoint != "" {
+		suffix := "observed"
+		if peer.ObservedAt != nil {
+			suffix = "observed " + time.Since(*peer.ObservedAt).Truncate(time.Second).String() + " ago"
+		}
+		return peer.ObservedEndpoint + " (" + suffix + ")"
+	}
+	return "-"
+}
+
+func wireGuardPeerStatus(peers []wgtypes.Peer, nodesByPubkey map[string]directory.Node) []statusPeer {
 	status := make([]statusPeer, 0, len(peers))
 	for _, peer := range peers {
 		allowedIPs := make([]string, 0, len(peer.AllowedIPs))
 		for _, allowedIP := range peer.AllowedIPs {
 			allowedIPs = append(allowedIPs, allowedIP.String())
 		}
+		pubkey := peer.PublicKey.String()
 		item := statusPeer{
-			PublicKey:     peer.PublicKey.String(),
+			PublicKey:     pubkey,
 			AllowedIPs:    allowedIPs,
 			ReceiveBytes:  peer.ReceiveBytes,
 			TransmitBytes: peer.TransmitBytes,
+		}
+		if node, ok := nodesByPubkey[pubkey]; ok {
+			item.Name = node.Name
+			item.DirectoryEndpoint = node.Endpoint
+			item.ObservedEndpoint = node.ObservedEndpoint
+			if !node.ObservedAt.IsZero() {
+				observedAt := node.ObservedAt
+				item.ObservedAt = &observedAt
+			}
 		}
 		if peer.Endpoint != nil {
 			item.Endpoint = peer.Endpoint.String()
@@ -199,16 +248,12 @@ func printStatusText(out statusOutput) {
 					handshake += " (" + peer.LastHandshakeAge + " ago)"
 				}
 			}
-			endpoint := peer.Endpoint
-			if endpoint == "" {
-				endpoint = "-"
-			}
 			keepalive := peer.PersistentKeepalive
 			if keepalive == "" {
 				keepalive = "-"
 			}
 			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%d\t%d\t%s\n",
-				peer.PublicKey, endpoint, strings.Join(peer.AllowedIPs, ","), handshake, peer.ReceiveBytes, peer.TransmitBytes, keepalive)
+				peerLabel(peer), peerEndpointLabel(peer), strings.Join(peer.AllowedIPs, ","), handshake, peer.ReceiveBytes, peer.TransmitBytes, keepalive)
 		}
 		_ = w.Flush()
 	}
