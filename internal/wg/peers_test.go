@@ -285,3 +285,37 @@ func TestBuildPeerConfigsKeepaliveAndAllowedIPs(t *testing.T) {
 		t.Fatalf("public self should not set keepalive")
 	}
 }
+
+func TestAppendDeletionsMarksAbsentPeers(t *testing.T) {
+	keyA, _ := wgtypes.GeneratePrivateKey()
+	keyB, _ := wgtypes.GeneratePrivateKey()
+	keyC, _ := wgtypes.GeneratePrivateKey()
+	pubA, pubB, pubC := keyA.PublicKey(), keyB.PublicKey(), keyC.PublicKey()
+
+	target := []wgtypes.PeerConfig{
+		{PublicKey: pubA},
+		{PublicKey: pubB},
+	}
+	existing := []wgtypes.Peer{
+		{PublicKey: pubA},
+		{PublicKey: pubC},
+	}
+
+	got := appendDeletions(target, existing)
+
+	if len(got) != 3 {
+		t.Fatalf("len=%d want 3", len(got))
+	}
+	removed := got[2]
+	if removed.PublicKey != pubC {
+		t.Fatalf("removed peer key=%s want %s", removed.PublicKey, pubC)
+	}
+	if !removed.Remove {
+		t.Fatalf("absent peer not marked Remove: %+v", removed)
+	}
+	for _, p := range got[:2] {
+		if p.Remove {
+			t.Fatalf("present peer marked Remove: %+v", p)
+		}
+	}
+}

@@ -4,6 +4,7 @@ package wg
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
@@ -64,10 +65,11 @@ func (m *Manager) Apply(self directory.Node, dir directory.Directory) error {
 		return fmt.Errorf("open wgctrl: %w", err)
 	}
 	defer client.Close()
+	peers = mergeAgainstKernel(client, m.iface, peers)
 	if err := client.ConfigureDevice(m.iface, wgtypes.Config{
 		PrivateKey:   &m.privateKey,
 		ListenPort:   m.listenPort,
-		ReplacePeers: true,
+		ReplacePeers: false,
 		Peers:        peers,
 	}); err != nil {
 		return fmt.Errorf("configure WireGuard device: %w", err)
@@ -86,6 +88,43 @@ func (m *Manager) Ensure(self directory.Node, dir directory.Directory) error {
 		return err
 	}
 	return m.Apply(self, dir)
+}
+
+// mergeAgainstKernel adapts a freshly-built peer list for use with
+// ReplacePeers=false: it normalizes nil keepalive durations to an explicit
+// zero (so the kernel reliably picks up role changes) and appends Remove
+// entries for any peer currently in the kernel that no longer appears in the
+// directory. Using ReplacePeers=false preserves kernel-tracked state
+// (LastHandshakeTime, source-learned endpoints) across reconcile loops, which
+// the admin's endpoint observation depends on.
+func mergeAgainstKernel(client *wgctrl.Client, iface string, peers []wgtypes.PeerConfig) []wgtypes.PeerConfig {
+	zero := time.Duration(0)
+	for i := range peers {
+		if peers[i].PersistentKeepaliveInterval == nil {
+			peers[i].PersistentKeepaliveInterval = &zero
+		}
+	}
+	dev, err := client.Device(iface)
+	if err != nil {
+		return peers
+	}
+	return appendDeletions(peers, dev.Peers)
+}
+
+func appendDeletions(target []wgtypes.PeerConfig, existing []wgtypes.Peer) []wgtypes.PeerConfig {
+	keep := make(map[wgtypes.Key]bool, len(target))
+	for _, p := range target {
+		keep[p.PublicKey] = true
+	}
+	for _, p := range existing {
+		if !keep[p.PublicKey] {
+			target = append(target, wgtypes.PeerConfig{
+				PublicKey: p.PublicKey,
+				Remove:    true,
+			})
+		}
+	}
+	return target
 }
 
 func (m *Manager) Peers() ([]wgtypes.Peer, error) {
