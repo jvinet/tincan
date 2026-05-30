@@ -11,23 +11,21 @@ import (
 	"sync"
 
 	"github.com/jvinet/tincan/internal/config"
-	"github.com/jvinet/tincan/internal/relay"
 	"github.com/vishvananda/netlink"
 )
 
 // startNetworkWatcher launches a goroutine that watches the kernel for IP
 // address changes on non-loopback, non-tincan interfaces. On any such
-// change, it tells the relay controller to probe direct connectivity again
-// (e.g. because the laptop just switched wifi networks) and wakes the
-// daemon's main loop so reconciliation runs immediately rather than waiting
-// for the next interval.
+// change it wakes the daemon's main loop so the iteration runs immediately
+// (rather than waiting for the next sync interval) and re-reads wgctrl —
+// where a fresh handshake on a shadow-peer would be visible if the new
+// network topology makes direct viable.
 //
 // IPv6 SLAAC lifetime renewals and DHCP refreshes both surface as RTM_NEWADDR
 // events for an address that already exists; without dedup, a typical
-// hosting-provider VM emits these every few minutes and turns every relayed
-// peer into a constant DIRECT-probe loop. We track the address set ourselves
-// and only signal on actual add/remove transitions.
-func startNetworkWatcher(ctx context.Context, configPath string, controller *relay.Controller, wakeCh chan<- string, perr *printer) {
+// hosting-provider VM emits these every few minutes. We track the address
+// set ourselves and only fire on actual add/remove transitions.
+func startNetworkWatcher(ctx context.Context, configPath string, wakeCh chan<- string, perr *printer) {
 	iface := config.DefaultInterface
 	if cfg, err := config.Load(configPath); err == nil && cfg.Wireguard.Interface != "" {
 		iface = cfg.Wireguard.Interface
@@ -60,7 +58,6 @@ func startNetworkWatcher(ctx context.Context, configPath string, controller *rel
 					continue
 				}
 				slog.Info("network change detected", "link_index", update.LinkIndex, "addr", update.LinkAddress.String(), "new", update.NewAddr)
-				controller.MarkNetChanged()
 				select {
 				case wakeCh <- "local network changed":
 				default:

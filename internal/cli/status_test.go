@@ -103,7 +103,7 @@ func startsWith(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
-func TestWireGuardPeerStatusSynthesizesRelayed(t *testing.T) {
+func TestWireGuardPeerStatusDetectsShadowPeerAsRelayed(t *testing.T) {
 	relayKey, _ := wgKeyForTest()
 	otherKey, _ := wgKeyForTest()
 	selfKey, _ := wgKeyForTest()
@@ -113,9 +113,13 @@ func TestWireGuardPeerStatusSynthesizesRelayed(t *testing.T) {
 	otherNode := directory.Node{Name: "kilo", PublicKey: otherKey, TunnelIP: "10.42.0.3"}
 	dir := directory.Directory{Nodes: []directory.Node{self, relayNode, otherNode}}
 
-	// Simulate the daemon's relay configuration: only the relay target is in
-	// wgctrl, with the absent peer's tunnel IP folded into its AllowedIPs.
+	// Simulate the daemon's RELAYED configuration: relay target carries both
+	// /32s, the relayed peer is present as a shadow peer with empty AllowedIPs.
 	parsedRelayKey, err := keys.ParseWGPublic(relayKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedOtherKey, err := keys.ParseWGPublic(otherKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,11 +127,12 @@ func TestWireGuardPeerStatusSynthesizesRelayed(t *testing.T) {
 	_, ip2, _ := net.ParseCIDR("10.42.0.3/32")
 	peers := []wgtypes.Peer{
 		{PublicKey: parsedRelayKey, AllowedIPs: []net.IPNet{*ip1, *ip2}},
+		{PublicKey: parsedOtherKey, AllowedIPs: nil},
 	}
 
 	status := wireGuardPeerStatus(peers, dir, self)
 	if len(status) != 2 {
-		t.Fatalf("len=%d want 2 (relay + synthesized relayed)", len(status))
+		t.Fatalf("len=%d want 2 (relay + shadow)", len(status))
 	}
 	var relayed *statusPeer
 	for i := range status {
@@ -136,7 +141,7 @@ func TestWireGuardPeerStatusSynthesizesRelayed(t *testing.T) {
 		}
 	}
 	if relayed == nil {
-		t.Fatalf("relayed peer not synthesized: %+v", status)
+		t.Fatalf("shadow peer not found: %+v", status)
 	}
 	if relayed.Mode != "relayed" {
 		t.Fatalf("mode=%q want relayed", relayed.Mode)

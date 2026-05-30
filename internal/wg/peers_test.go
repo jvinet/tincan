@@ -322,24 +322,47 @@ func TestAppendDeletionsMarksAbsentPeers(t *testing.T) {
 
 func TestBuildPeerConfigsRelayFoldsAllowedIPs(t *testing.T) {
 	// self (alice) is NAT'd; bob is the relay target (has Endpoint); carol is
-	// another NAT'd peer that we've decided to relay.
+	// another NAT'd peer that we've decided to relay. carol stays in the peer
+	// list as a "shadow" peer (empty AllowedIPs, but live endpoint+keepalive)
+	// so the kernel keeps probing direct reachability in the background.
 	self, dir := peerFixture(t)
+	dir.Nodes[2].ObservedEndpoint = "203.0.113.10:5555"
+	dir.Nodes[2].ObservedAt = time.Now()
 	relayed := map[string]bool{dir.Nodes[2].PublicKey: true} // carol
 
 	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, relayed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(peers) != 1 {
-		t.Fatalf("relayed peer should be omitted; peers=%d (%+v)", len(peers), peers)
+	if len(peers) != 2 {
+		t.Fatalf("relayed peer should remain as shadow peer; peers=%d (%+v)", len(peers), peers)
 	}
-	bob := peers[0]
+	var bob, carol *wgtypes.PeerConfig
+	for i := range peers {
+		switch peers[i].PublicKey.String() {
+		case dir.Nodes[1].PublicKey:
+			bob = &peers[i]
+		case dir.Nodes[2].PublicKey:
+			carol = &peers[i]
+		}
+	}
+	if bob == nil || carol == nil {
+		t.Fatalf("missing peers: bob=%v carol=%v", bob, carol)
+	}
 	if len(bob.AllowedIPs) != 2 {
 		t.Fatalf("bob (relay) should carry 2 AllowedIPs (self + carol); got %+v", bob.AllowedIPs)
 	}
-	gotIPs := []string{bob.AllowedIPs[0].IP.String(), bob.AllowedIPs[1].IP.String()}
-	if gotIPs[0] != "10.42.0.2" || gotIPs[1] != "10.42.0.3" {
-		t.Fatalf("AllowedIPs=%v want [10.42.0.2 10.42.0.3]", gotIPs)
+	if bob.AllowedIPs[0].IP.String() != "10.42.0.2" || bob.AllowedIPs[1].IP.String() != "10.42.0.3" {
+		t.Fatalf("bob AllowedIPs=%v want [10.42.0.2 10.42.0.3]", bob.AllowedIPs)
+	}
+	if len(carol.AllowedIPs) != 0 {
+		t.Fatalf("carol (shadow) should have empty AllowedIPs; got %+v", carol.AllowedIPs)
+	}
+	if carol.Endpoint == nil || carol.Endpoint.IP.String() != "203.0.113.10" || carol.Endpoint.Port != 5555 {
+		t.Fatalf("carol shadow peer should keep its endpoint for kernel probes; got %v", carol.Endpoint)
+	}
+	if carol.PersistentKeepaliveInterval == nil || *carol.PersistentKeepaliveInterval != 25*time.Second {
+		t.Fatalf("carol shadow peer should keep keepalive (drives the probe); got %v", carol.PersistentKeepaliveInterval)
 	}
 }
 

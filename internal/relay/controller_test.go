@@ -80,17 +80,17 @@ func TestControllerRelaysAfterDirectFailure(t *testing.T) {
 	c := NewController(Config{})
 	now := time.Now()
 
-	// First iteration: peer fresh; no relay yet (initial DIRECT, no tx growth).
+	// First iteration: peer fresh; no relay yet (initial DIRECT, in grace).
 	c.Update(self, dir, []wgtypes.Peer{
-		{PublicKey: wgKey(t, peerPub), TransmitBytes: 100, LastHandshakeTime: now},
-		{PublicKey: wgKey(t, relayPub), TransmitBytes: 100, LastHandshakeTime: now},
+		{PublicKey: wgKey(t, peerPub), LastHandshakeTime: now},
+		{PublicKey: wgKey(t, relayPub), LastHandshakeTime: now},
 	}, now)
 
-	// Advance time past DirectFailedAfter with growing tx, no handshake refresh.
+	// Advance time past DirectFailedAfter with no handshake refresh.
 	later := now.Add(3 * time.Minute)
 	dec := c.Update(self, dir, []wgtypes.Peer{
-		{PublicKey: wgKey(t, peerPub), TransmitBytes: 500, LastHandshakeTime: now}, // stale
-		{PublicKey: wgKey(t, relayPub), TransmitBytes: 500, LastHandshakeTime: later},
+		{PublicKey: wgKey(t, peerPub), LastHandshakeTime: now}, // stale
+		{PublicKey: wgKey(t, relayPub), LastHandshakeTime: later},
 	}, later)
 
 	if !dec.Relayed[peerPub] {
@@ -101,7 +101,9 @@ func TestControllerRelaysAfterDirectFailure(t *testing.T) {
 	}
 }
 
-func TestControllerNetChangedTriggersProbe(t *testing.T) {
+func TestControllerRelayedFlipsBackOnShadowHandshake(t *testing.T) {
+	// Once a kernel-driven shadow-peer handshake succeeds, the controller
+	// should immediately flip back to DIRECT without waiting for a timer.
 	selfPub := mustWGKey(t)
 	peerPub := mustWGKey(t)
 	relayPub := mustWGKey(t)
@@ -114,22 +116,18 @@ func TestControllerNetChangedTriggersProbe(t *testing.T) {
 
 	c := NewController(Config{})
 	now := time.Now()
+	c.states[peerPub] = PeerState{Mode: ModeRelayed, EnteredAt: now.Add(-10 * time.Minute)}
 
-	// Force peer into RELAYED by simulating direct failure.
-	c.states[peerPub] = PeerState{Mode: ModeRelayed, EnteredAt: now}
-
-	// Right after, with net change, we should probe direct.
-	c.MarkNetChanged()
 	dec := c.Update(self, dir, []wgtypes.Peer{
-		{PublicKey: wgKey(t, peerPub)},
-		{PublicKey: wgKey(t, relayPub)},
-	}, now.Add(time.Second))
+		{PublicKey: wgKey(t, peerPub), LastHandshakeTime: now.Add(-5 * time.Second)},
+		{PublicKey: wgKey(t, relayPub), LastHandshakeTime: now},
+	}, now)
 
 	if dec.Relayed[peerPub] {
-		t.Fatalf("net change should have moved peer back to DIRECT; got relayed")
+		t.Fatalf("shadow handshake should flip back to DIRECT; got relayed")
 	}
 	if dec.PeerStates[peerPub].Mode != ModeDirect {
-		t.Fatalf("expected DIRECT mode after net change; got %v", dec.PeerStates[peerPub].Mode)
+		t.Fatalf("expected DIRECT mode after shadow handshake; got %v", dec.PeerStates[peerPub].Mode)
 	}
 }
 

@@ -16,16 +16,11 @@ import (
 // Each iteration the daemon calls Update with a fresh wgctrl snapshot and
 // directory; the controller decides per-peer mode and returns the set of
 // peer public keys that should be routed through the relay target.
-//
-// MarkNetChanged is intended to be called from a netlink watcher: it sets a
-// one-shot flag that the next Update consumes to probe direct connectivity
-// for every relayed peer.
 type Controller struct {
 	cfg Config
 
-	mu             sync.Mutex
-	states         map[string]PeerState // peer.PublicKey -> state
-	netChangedOnce bool
+	mu     sync.Mutex
+	states map[string]PeerState // peer.PublicKey -> state
 }
 
 func NewController(cfg Config) *Controller {
@@ -35,21 +30,12 @@ func NewController(cfg Config) *Controller {
 	}
 }
 
-// MarkNetChanged signals that this host's local network address set may have
-// changed (e.g. wifi reassociation, DHCP rebind). The next Update will treat
-// every relayed peer as if its probe interval had elapsed.
-func (c *Controller) MarkNetChanged() {
-	c.mu.Lock()
-	c.netChangedOnce = true
-	c.mu.Unlock()
-}
-
 // Decision is the result of one Update call: per-peer state plus the set of
 // peers that should be relayed in the next WG reconcile.
 type Decision struct {
-	Relayed    map[string]bool      // peer.PublicKey -> true if relayed
-	PeerStates map[string]PeerState // for status display and tests
-	RelayTarget *directory.Node     // chosen relay node, or nil if none available
+	Relayed     map[string]bool      // peer.PublicKey -> true if relayed
+	PeerStates  map[string]PeerState // for status display and tests
+	RelayTarget *directory.Node      // chosen relay node, or nil if none available
 }
 
 // Update advances the per-peer state machine. It returns the set of peer
@@ -63,9 +49,6 @@ type Decision struct {
 func (c *Controller) Update(self directory.Node, dir directory.Directory, peers []wgtypes.Peer, now time.Time) Decision {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	netChanged := c.netChangedOnce
-	c.netChangedOnce = false
 
 	if self.Endpoint != "" {
 		slog.Debug("relay: skipping decision (self has endpoint)", "self", self.Name)
@@ -121,13 +104,12 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 
 		kernelPeer := peerByKey[pub]
 		next := Decide(Inputs{
-			Now:             now,
-			Previous:        prev,
-			Peer:            kernelPeer,
-			Node:            node,
-			LocalNetChanged: netChanged,
+			Now:      now,
+			Previous: prev,
+			Peer:     kernelPeer,
+			Node:     node,
 		}, c.cfg)
-		logDecision(node, prev, next, kernelPeer, netChanged, now)
+		logDecision(node, prev, next, kernelPeer, now)
 		newStates[node.PublicKey] = next
 		if next.Mode == ModeRelayed {
 			relayed[node.PublicKey] = true
@@ -142,7 +124,7 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 	}
 }
 
-func logDecision(node directory.Node, prev, next PeerState, kp wgtypes.Peer, netChanged bool, now time.Time) {
+func logDecision(node directory.Node, prev, next PeerState, kp wgtypes.Peer, now time.Time) {
 	handshakeAge := "never"
 	if !kp.LastHandshakeTime.IsZero() {
 		handshakeAge = now.Sub(kp.LastHandshakeTime).Round(time.Second).String()
@@ -154,10 +136,7 @@ func logDecision(node directory.Node, prev, next PeerState, kp wgtypes.Peer, net
 		"in_mode_for", now.Sub(prev.EnteredAt).Round(time.Second).String(),
 		"handshake_age", handshakeAge,
 		"tx_bytes", kp.TransmitBytes,
-		"tx_growth", kp.TransmitBytes-prev.LastTxBytes,
 		"observed_endpoint", node.ObservedEndpoint,
-		"prev_observed_endpoint", prev.LastObservedEndpoint,
-		"local_net_changed", netChanged,
 	)
 }
 

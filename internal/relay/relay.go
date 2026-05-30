@@ -3,9 +3,16 @@
 //
 // The decision is per-(self, peer) and lives entirely on the client. Admin
 // nodes can't observe peer-to-peer reachability — only handshakes against
-// themselves — so each client watches its own wgctrl state, detects when the
-// direct path is broken, and reshuffles AllowedIPs to route the peer's
+// themselves — so each client watches its own wgctrl state, detects when
+// the direct path is broken, and reshuffles AllowedIPs to route the peer's
 // tunnel traffic through the relay node instead.
+//
+// When a peer is RELAYED, it remains configured as a "shadow peer" with
+// empty AllowedIPs but a live endpoint and keepalive. The kernel keeps
+// attempting background handshakes on that peer; the moment one succeeds,
+// LastHandshakeTime becomes fresh and Decide flips the peer back to
+// DIRECT. No timed probes, no service interruption — the data path
+// through the relay stays up until direct is proven viable.
 package relay
 
 import (
@@ -35,14 +42,10 @@ func (m Mode) String() string {
 
 const (
 	// DefaultDirectFailedAfter is how long a peer can go without a fresh
-	// handshake (while we keep sending packets) before we declare the direct
-	// path broken and fall back to the relay.
+	// handshake before we declare the direct path broken (in DIRECT mode) or
+	// consider it viable again (in RELAYED mode, looking at shadow-peer
+	// handshakes).
 	DefaultDirectFailedAfter = 90 * time.Second
-
-	// DefaultProbeInterval is how often a RELAYED peer is moved back to
-	// DIRECT to retry the direct path. Explicit signals (peer's
-	// ObservedEndpoint changed, local network changed) probe immediately.
-	DefaultProbeInterval = 5 * time.Minute
 
 	// DefaultDirectGracePeriod gives the kernel time to complete a handshake
 	// after entering DIRECT before we evaluate liveness. Without this, a
@@ -52,16 +55,12 @@ const (
 
 type Config struct {
 	DirectFailedAfter time.Duration
-	ProbeInterval     time.Duration
 	DirectGracePeriod time.Duration
 }
 
 func (c Config) withDefaults() Config {
 	if c.DirectFailedAfter <= 0 {
 		c.DirectFailedAfter = DefaultDirectFailedAfter
-	}
-	if c.ProbeInterval <= 0 {
-		c.ProbeInterval = DefaultProbeInterval
 	}
 	if c.DirectGracePeriod <= 0 {
 		c.DirectGracePeriod = DefaultDirectGracePeriod
@@ -72,19 +71,16 @@ func (c Config) withDefaults() Config {
 // PeerState is what Decide reads and writes between iterations. The caller
 // (relay.Controller) owns the storage.
 type PeerState struct {
-	Mode                 Mode
-	EnteredAt            time.Time
-	LastTxBytes          int64
-	LastObservedEndpoint string
+	Mode      Mode
+	EnteredAt time.Time
 }
 
 // Inputs are the per-peer signals Decide needs to make a transition.
 type Inputs struct {
-	Now             time.Time
-	Previous        PeerState
-	Peer            wgtypes.Peer
-	Node            directory.Node
-	LocalNetChanged bool
+	Now      time.Time
+	Previous PeerState
+	Peer     wgtypes.Peer
+	Node     directory.Node
 }
 
 // Decide returns the next PeerState given the previous one and the current
@@ -92,40 +88,31 @@ type Inputs struct {
 func Decide(in Inputs, cfg Config) PeerState {
 	cfg = cfg.withDefaults()
 	out := in.Previous
-	out.LastTxBytes = in.Peer.TransmitBytes
-	out.LastObservedEndpoint = in.Node.ObservedEndpoint
+
+	handshakeFresh := !in.Peer.LastHandshakeTime.IsZero() &&
+		in.Now.Sub(in.Peer.LastHandshakeTime) < cfg.DirectFailedAfter
 
 	switch in.Previous.Mode {
 	case ModeDirect:
-		// Grace period after entering DIRECT: give the kernel time to handshake.
+		// Grace period: give the kernel time to handshake before judging.
 		if in.Now.Sub(in.Previous.EnteredAt) < cfg.DirectGracePeriod {
 			return out
 		}
-		// Need fresh tx to have happened — otherwise the peer is idle, not broken.
-		if in.Peer.TransmitBytes <= in.Previous.LastTxBytes {
-			return out
-		}
-		broken := false
+		var stale bool
 		if in.Peer.LastHandshakeTime.IsZero() {
-			// Never handshook. If we've been trying past DirectFailedAfter, give up.
-			broken = in.Now.Sub(in.Previous.EnteredAt) > cfg.DirectFailedAfter
+			stale = in.Now.Sub(in.Previous.EnteredAt) > cfg.DirectFailedAfter
 		} else {
-			broken = in.Now.Sub(in.Peer.LastHandshakeTime) > cfg.DirectFailedAfter
+			stale = in.Now.Sub(in.Peer.LastHandshakeTime) > cfg.DirectFailedAfter
 		}
-		if broken {
+		if stale {
 			out.Mode = ModeRelayed
 			out.EnteredAt = in.Now
 		}
 	case ModeRelayed:
-		peerMoved := in.Node.ObservedEndpoint != "" &&
-			in.Node.ObservedEndpoint != in.Previous.LastObservedEndpoint
-		probeDue := in.Now.Sub(in.Previous.EnteredAt) > cfg.ProbeInterval
-		if in.LocalNetChanged || peerMoved || probeDue {
+		// Shadow peer's background handshake succeeded — direct is viable.
+		if handshakeFresh {
 			out.Mode = ModeDirect
 			out.EnteredAt = in.Now
-			// Reset LastTxBytes to current so the next iteration measures growth
-			// from the moment we re-entered DIRECT.
-			out.LastTxBytes = in.Peer.TransmitBytes
 		}
 	}
 	return out

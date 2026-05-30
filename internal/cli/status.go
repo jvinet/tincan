@@ -200,9 +200,9 @@ func wireGuardPeerStatus(peers []wgtypes.Peer, dir directory.Directory, self dir
 		}
 	}
 
-	// Build the set of tunnel IPs that the relay target's wgctrl peer covers
-	// beyond its own tunnel IP. Those map to relayed directory nodes.
-	relayedByTunnelIP := make(map[string]bool)
+	// Build the set of tunnel IPs the relay target's wgctrl peer covers
+	// beyond its own — those are the IPs being routed through the relay.
+	relayedTunnelIPs := make(map[string]bool)
 	if relayTarget != nil {
 		if relayPeer, ok := peerByPubkey[relayTarget.PublicKey]; ok {
 			for _, allowed := range relayPeer.AllowedIPs {
@@ -210,20 +210,18 @@ func wireGuardPeerStatus(peers []wgtypes.Peer, dir directory.Directory, self dir
 				if ip == relayTarget.TunnelIP {
 					continue
 				}
-				relayedByTunnelIP[ip] = true
+				relayedTunnelIPs[ip] = true
 			}
 		}
 	}
 
 	status := make([]statusPeer, 0, len(peers))
-	seen := make(map[string]bool, len(peers))
 	for _, peer := range peers {
 		allowedIPs := make([]string, 0, len(peer.AllowedIPs))
 		for _, allowedIP := range peer.AllowedIPs {
 			allowedIPs = append(allowedIPs, allowedIP.String())
 		}
 		pubkey := peer.PublicKey.String()
-		seen[pubkey] = true
 		item := statusPeer{
 			PublicKey:     pubkey,
 			Mode:          "direct",
@@ -239,6 +237,14 @@ func wireGuardPeerStatus(peers []wgtypes.Peer, dir directory.Directory, self dir
 				observedAt := node.ObservedAt
 				item.ObservedAt = &observedAt
 			}
+			// A shadow peer (empty AllowedIPs) whose tunnel IP is being
+			// carried by the relay target is in RELAYED mode — its kernel
+			// configuration exists solely as a background probe for direct
+			// reachability.
+			if relayTarget != nil && len(peer.AllowedIPs) == 0 && relayedTunnelIPs[node.TunnelIP] {
+				item.Mode = "relayed"
+				item.RelayVia = relayTarget.Name
+			}
 		}
 		if peer.Endpoint != nil {
 			item.Endpoint = peer.Endpoint.String()
@@ -252,37 +258,6 @@ func wireGuardPeerStatus(peers []wgtypes.Peer, dir directory.Directory, self dir
 			item.PersistentKeepalive = peer.PersistentKeepaliveInterval.String()
 		}
 		status = append(status, item)
-	}
-
-	// Synthesize entries for directory nodes that the daemon has folded into
-	// the relay target's AllowedIPs (i.e. peers we route via the relay).
-	if relayTarget != nil {
-		for _, node := range dir.Nodes {
-			if node.PublicKey == self.PublicKey || seen[node.PublicKey] {
-				continue
-			}
-			if !relayedByTunnelIP[node.TunnelIP] {
-				continue
-			}
-			item := statusPeer{
-				PublicKey:  node.PublicKey,
-				Name:       node.Name,
-				Mode:       "relayed",
-				RelayVia:   relayTarget.Name,
-				AllowedIPs: []string{node.TunnelIP + "/32"},
-			}
-			if node.Endpoint != "" {
-				item.DirectoryEndpoint = node.Endpoint
-			}
-			if node.ObservedEndpoint != "" {
-				item.ObservedEndpoint = node.ObservedEndpoint
-			}
-			if !node.ObservedAt.IsZero() {
-				observedAt := node.ObservedAt
-				item.ObservedAt = &observedAt
-			}
-			status = append(status, item)
-		}
 	}
 	return status
 }

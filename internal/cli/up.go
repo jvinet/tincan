@@ -122,7 +122,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 
 	watchCtx, stopWatch := context.WithCancel(ctx)
 	defer stopWatch()
-	startNetworkWatcher(watchCtx, configPath, controller, wakeCh, perr)
+	startNetworkWatcher(watchCtx, configPath, wakeCh, perr)
 	startAdminPreflight(configPath, pout)
 
 	slog.Info("daemon loop started", "pid", os.Getpid(), "config", configPath)

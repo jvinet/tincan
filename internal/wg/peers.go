@@ -17,14 +17,18 @@ const ObservedEndpointTTL = 30 * time.Minute
 
 // BuildPeerConfigs translates the directory into a list of WireGuard
 // PeerConfigs for self's interface. When relayed is non-empty, the listed
-// peers (by public key string) are omitted from the peer list and their
-// tunnel IPs are folded into the relay target's AllowedIPs so traffic to
-// them flows through the relay.
+// peers (by public key string) become "shadow peers": their tunnel IPs are
+// folded into the relay target's AllowedIPs (so data routes through the
+// relay), but they are still configured as peers themselves — with empty
+// AllowedIPs, plus their endpoint and keepalive. The kernel keeps trying
+// background handshakes on those shadow peers; when one succeeds, the
+// daemon observes a fresh LastHandshakeTime via wgctrl and flips the peer
+// back to DIRECT (just reshuffling AllowedIPs — no peer add/remove).
 //
 // The relay target is the first non-self node in the directory with a
 // public Endpoint set. If relayed is empty or no relay target exists,
-// every peer in the directory gets its own peer entry — i.e. the function
-// behaves exactly as it did before the relay feature.
+// every peer in the directory gets its own AllowedIPs and behaves
+// directly.
 func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir directory.Directory, relayed map[string]bool) ([]wgtypes.PeerConfig, error) {
 	selfHasEndpoint := self.Endpoint != ""
 	keepalive := time.Duration(0)
@@ -55,26 +59,24 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 		if node.PublicKey == self.PublicKey {
 			continue
 		}
-		if relayed[node.PublicKey] && relayTargetKey != "" && node.PublicKey != relayTargetKey {
-			_, extraIP, err := net.ParseCIDR(node.TunnelIP + "/32")
-			if err != nil {
-				return nil, fmt.Errorf("relayed peer %q tunnel IP: %w", node.Name, err)
-			}
-			extraAllowedIPs = append(extraAllowedIPs, *extraIP)
-			continue
-		}
 		pub, err := keys.ParseWGPublic(node.PublicKey)
 		if err != nil {
 			return nil, fmt.Errorf("peer %q: %w", node.Name, err)
 		}
-		_, allowedIP, err := net.ParseCIDR(node.TunnelIP + "/32")
+		_, tunnel, err := net.ParseCIDR(node.TunnelIP + "/32")
 		if err != nil {
 			return nil, fmt.Errorf("peer %q tunnel IP: %w", node.Name, err)
 		}
+		shadow := relayed[node.PublicKey] && relayTargetKey != "" && node.PublicKey != relayTargetKey
 		peer := wgtypes.PeerConfig{
 			PublicKey:         pub,
 			ReplaceAllowedIPs: true,
-			AllowedIPs:        []net.IPNet{*allowedIP},
+		}
+		if shadow {
+			peer.AllowedIPs = []net.IPNet{}
+			extraAllowedIPs = append(extraAllowedIPs, *tunnel)
+		} else {
+			peer.AllowedIPs = []net.IPNet{*tunnel}
 		}
 		endpointStr := chooseEndpoint(node, time.Now())
 		if endpointStr != "" {

@@ -308,20 +308,18 @@ fallback](#relay-fallback) takes over automatically.
 
 If the direct peer-to-peer path stays broken (no handshake for ~90s while
 keepalives go out), each client switches that peer to **relayed** mode:
-the peer is removed from the local WireGuard config and the admin's
-`AllowedIPs` is widened to cover the peer's tunnel IP, so packets flow
-through the admin instead. Other peers reachable directly are unaffected.
+the admin's `AllowedIPs` is widened to cover the peer's tunnel IP, so data
+packets flow through the admin instead. The peer's own entry stays in the
+local WireGuard config but with empty `AllowedIPs` — kernel keepalives keep
+attempting handshakes to its endpoint in the background, while no actual
+data routes through it. This is the **shadow peer**: a probe channel that
+doesn't interrupt the working relay path.
 
-While relayed, clients periodically re-probe the direct path:
-
-- every 5 minutes, opportunistically
-- immediately when the admin republishes a new `ObservedEndpoint` for the
-  peer (e.g. the peer moved networks)
-- immediately when the local machine's IP addresses change (e.g. a laptop
-  joined a different wifi network) — detected via netlink
-
-If a probe succeeds, the peer reverts to direct routing. If not, it falls
-back to relayed and waits for the next signal or interval.
+The moment one of those background handshakes succeeds, the daemon
+observes a fresh `LastHandshakeTime` via wgctrl and flips the peer back to
+direct — just by reshuffling `AllowedIPs`, no peer add/remove. There are
+no timed probes, no flapping; recovery happens whenever the kernel
+manages to handshake.
 
 To enable the relay role, the admin node must allow IP forwarding:
 
