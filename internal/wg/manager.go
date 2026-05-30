@@ -51,12 +51,12 @@ func (m *Manager) Up() error {
 	return nil
 }
 
-func (m *Manager) Apply(self directory.Node, dir directory.Directory) error {
+func (m *Manager) Apply(self directory.Node, dir directory.Directory, relayed map[string]bool) error {
 	link, err := netlink.LinkByName(m.iface)
 	if err != nil {
 		return fmt.Errorf("find link %q: %w", m.iface, err)
 	}
-	peers, err := BuildPeerConfigs(m.wg, self, dir)
+	peers, err := BuildPeerConfigs(m.wg, self, dir, relayed)
 	if err != nil {
 		return err
 	}
@@ -83,11 +83,11 @@ func (m *Manager) Apply(self directory.Node, dir directory.Directory) error {
 	return nil
 }
 
-func (m *Manager) Ensure(self directory.Node, dir directory.Directory) error {
+func (m *Manager) Ensure(self directory.Node, dir directory.Directory, relayed map[string]bool) error {
 	if err := m.Up(); err != nil {
 		return err
 	}
-	return m.Apply(self, dir)
+	return m.Apply(self, dir, relayed)
 }
 
 // mergeAgainstKernel adapts a freshly-built peer list for use with

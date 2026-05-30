@@ -34,6 +34,8 @@ type statusOutput struct {
 type statusPeer struct {
 	PublicKey           string     `json:"public_key"`
 	Name                string     `json:"name,omitempty"`
+	Mode                string     `json:"mode,omitempty"` // "direct", "relayed", or empty when unknown
+	RelayVia            string     `json:"relay_via,omitempty"`
 	Endpoint            string     `json:"endpoint,omitempty"`
 	DirectoryEndpoint   string     `json:"directory_endpoint,omitempty"`
 	ObservedEndpoint    string     `json:"observed_endpoint,omitempty"`
@@ -116,6 +118,8 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		out.Drop["reachable"] = false
 		out.Drop["error"] = err.Error()
 	}
+	dir, _, _ := cache.Read(cfg.Sync.Cache)
+	self, _ := findSelf(cfg, dir)
 	if client, err := wgctrl.New(); err == nil {
 		dev, devErr := client.Device(cfg.Wireguard.Interface)
 		_ = client.Close()
@@ -123,7 +127,7 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 			out.WireGuard["public_key"] = dev.PublicKey.String()
 			out.WireGuard["listen_port"] = dev.ListenPort
 			out.WireGuard["peer_count"] = len(dev.Peers)
-			out.WireGuard["peers"] = wireGuardPeerStatus(dev.Peers, nodesByPubkey)
+			out.WireGuard["peers"] = wireGuardPeerStatus(dev.Peers, dir, self)
 			out.WireGuard["type"] = dev.Type.String()
 		} else {
 			out.WireGuard["error"] = devErr.Error()
@@ -151,6 +155,12 @@ func peerLabel(peer statusPeer) string {
 }
 
 func peerEndpointLabel(peer statusPeer) string {
+	if peer.Mode == "relayed" {
+		if peer.RelayVia != "" {
+			return "via " + peer.RelayVia
+		}
+		return "via relay"
+	}
 	if peer.Endpoint != "" {
 		return peer.Endpoint
 	}
@@ -167,16 +177,56 @@ func peerEndpointLabel(peer statusPeer) string {
 	return "-"
 }
 
-func wireGuardPeerStatus(peers []wgtypes.Peer, nodesByPubkey map[string]directory.Node) []statusPeer {
+func wireGuardPeerStatus(peers []wgtypes.Peer, dir directory.Directory, self directory.Node) []statusPeer {
+	nodesByPubkey := make(map[string]directory.Node, len(dir.Nodes))
+	for _, node := range dir.Nodes {
+		nodesByPubkey[node.PublicKey] = node
+	}
+	peerByPubkey := make(map[string]wgtypes.Peer, len(peers))
+	for _, p := range peers {
+		peerByPubkey[p.PublicKey.String()] = p
+	}
+
+	// Identify the relay target. Same rule as the daemon: first non-self node
+	// in directory with a public Endpoint set.
+	var relayTarget *directory.Node
+	for i := range dir.Nodes {
+		if dir.Nodes[i].PublicKey == self.PublicKey {
+			continue
+		}
+		if dir.Nodes[i].Endpoint != "" {
+			relayTarget = &dir.Nodes[i]
+			break
+		}
+	}
+
+	// Build the set of tunnel IPs that the relay target's wgctrl peer covers
+	// beyond its own tunnel IP. Those map to relayed directory nodes.
+	relayedByTunnelIP := make(map[string]bool)
+	if relayTarget != nil {
+		if relayPeer, ok := peerByPubkey[relayTarget.PublicKey]; ok {
+			for _, allowed := range relayPeer.AllowedIPs {
+				ip := allowed.IP.String()
+				if ip == relayTarget.TunnelIP {
+					continue
+				}
+				relayedByTunnelIP[ip] = true
+			}
+		}
+	}
+
 	status := make([]statusPeer, 0, len(peers))
+	seen := make(map[string]bool, len(peers))
 	for _, peer := range peers {
 		allowedIPs := make([]string, 0, len(peer.AllowedIPs))
 		for _, allowedIP := range peer.AllowedIPs {
 			allowedIPs = append(allowedIPs, allowedIP.String())
 		}
 		pubkey := peer.PublicKey.String()
+		seen[pubkey] = true
 		item := statusPeer{
 			PublicKey:     pubkey,
+			Mode:          "direct",
 			AllowedIPs:    allowedIPs,
 			ReceiveBytes:  peer.ReceiveBytes,
 			TransmitBytes: peer.TransmitBytes,
@@ -202,6 +252,37 @@ func wireGuardPeerStatus(peers []wgtypes.Peer, nodesByPubkey map[string]director
 			item.PersistentKeepalive = peer.PersistentKeepaliveInterval.String()
 		}
 		status = append(status, item)
+	}
+
+	// Synthesize entries for directory nodes that the daemon has folded into
+	// the relay target's AllowedIPs (i.e. peers we route via the relay).
+	if relayTarget != nil {
+		for _, node := range dir.Nodes {
+			if node.PublicKey == self.PublicKey || seen[node.PublicKey] {
+				continue
+			}
+			if !relayedByTunnelIP[node.TunnelIP] {
+				continue
+			}
+			item := statusPeer{
+				PublicKey:  node.PublicKey,
+				Name:       node.Name,
+				Mode:       "relayed",
+				RelayVia:   relayTarget.Name,
+				AllowedIPs: []string{node.TunnelIP + "/32"},
+			}
+			if node.Endpoint != "" {
+				item.DirectoryEndpoint = node.Endpoint
+			}
+			if node.ObservedEndpoint != "" {
+				item.ObservedEndpoint = node.ObservedEndpoint
+			}
+			if !node.ObservedAt.IsZero() {
+				observedAt := node.ObservedAt
+				item.ObservedAt = &observedAt
+			}
+			status = append(status, item)
+		}
 	}
 	return status
 }

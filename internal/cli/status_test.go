@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"net"
 	"testing"
 	"time"
+
+	"github.com/jvinet/tincan/internal/directory"
+	"github.com/jvinet/tincan/internal/keys"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 func TestPeerLabelPrefersName(t *testing.T) {
@@ -70,6 +75,16 @@ func TestPeerEndpointLabelPriority(t *testing.T) {
 			peer:  statusPeer{},
 			exact: "-",
 		},
+		{
+			name:  "relayed shows via target",
+			peer:  statusPeer{Mode: "relayed", RelayVia: "zf"},
+			exact: "via zf",
+		},
+		{
+			name:  "relayed without target name",
+			peer:  statusPeer{Mode: "relayed"},
+			exact: "via relay",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,4 +101,52 @@ func TestPeerEndpointLabelPriority(t *testing.T) {
 
 func startsWith(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+func TestWireGuardPeerStatusSynthesizesRelayed(t *testing.T) {
+	relayKey, _ := wgKeyForTest()
+	otherKey, _ := wgKeyForTest()
+	selfKey, _ := wgKeyForTest()
+
+	self := directory.Node{PublicKey: selfKey, TunnelIP: "10.42.0.1"}
+	relayNode := directory.Node{Name: "zf", PublicKey: relayKey, TunnelIP: "10.42.0.2", Endpoint: "zf.example.com:51820"}
+	otherNode := directory.Node{Name: "kilo", PublicKey: otherKey, TunnelIP: "10.42.0.3"}
+	dir := directory.Directory{Nodes: []directory.Node{self, relayNode, otherNode}}
+
+	// Simulate the daemon's relay configuration: only the relay target is in
+	// wgctrl, with the absent peer's tunnel IP folded into its AllowedIPs.
+	parsedRelayKey, err := keys.ParseWGPublic(relayKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ip1, _ := net.ParseCIDR("10.42.0.2/32")
+	_, ip2, _ := net.ParseCIDR("10.42.0.3/32")
+	peers := []wgtypes.Peer{
+		{PublicKey: parsedRelayKey, AllowedIPs: []net.IPNet{*ip1, *ip2}},
+	}
+
+	status := wireGuardPeerStatus(peers, dir, self)
+	if len(status) != 2 {
+		t.Fatalf("len=%d want 2 (relay + synthesized relayed)", len(status))
+	}
+	var relayed *statusPeer
+	for i := range status {
+		if status[i].PublicKey == otherKey {
+			relayed = &status[i]
+		}
+	}
+	if relayed == nil {
+		t.Fatalf("relayed peer not synthesized: %+v", status)
+	}
+	if relayed.Mode != "relayed" {
+		t.Fatalf("mode=%q want relayed", relayed.Mode)
+	}
+	if relayed.RelayVia != "zf" {
+		t.Fatalf("via=%q want zf", relayed.RelayVia)
+	}
+}
+
+func wgKeyForTest() (string, error) {
+	_, pub, err := keys.GenerateWGKeypair()
+	return pub, err
 }

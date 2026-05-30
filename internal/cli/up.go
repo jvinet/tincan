@@ -14,6 +14,7 @@ import (
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/daemon"
 	"github.com/jvinet/tincan/internal/directory"
+	"github.com/jvinet/tincan/internal/relay"
 	"github.com/jvinet/tincan/internal/wg"
 )
 
@@ -85,7 +86,7 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 		return err
 	}
 	p.headline("bringing up interface %s", cfg.Wireguard.Interface)
-	if err := manager.Apply(self, dir); err != nil {
+	if err := manager.Apply(self, dir, nil); err != nil {
 		return err
 	}
 	p.headline("setting IP address: %s", tunnelDisplay(self.TunnelIP, dir.NetworkCIDR))
@@ -107,13 +108,23 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	defer signal.Stop(sigCh)
 	pout := newPrinter(os.Stdout)
 	perr := newPrinter(os.Stderr)
+
+	controller := relay.NewController(relay.Config{})
+	wakeCh := make(chan string, 1)
+
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	startNetworkWatcher(watchCtx, configPath, controller, wakeCh, perr)
+	startAdminPreflight(configPath, pout)
+
+	prevModes := map[string]relay.Mode{}
 	for {
 		cfg, err := config.Load(configPath)
 		if err != nil {
 			perr.fail("failed to load config; %v", err)
 		} else {
 			timeout := iterationTimeout(cfg.Sync.Interval.Or(config.DefaultInterval))
-			if err := runDaemonIteration(ctx, cfg, timeout, pout); err != nil {
+			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes); err != nil {
 				perr.fail("daemon iteration failed; %v", err)
 			}
 		}
@@ -140,12 +151,18 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 				pout.hint("received shutdown signal (%s)", sig.String())
 				return nil
 			}
+		case reason := <-wakeCh:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			pout.hint("received wake (%s), reconciling", reason)
+			continue
 		case <-timer.C:
 		}
 	}
 }
 
-func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer) error {
+func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer, controller *relay.Controller, prevModes map[string]relay.Mode) error {
 	res, err := runSyncOnce(ctx, cfg, timeout)
 	if err != nil {
 		return err
@@ -163,7 +180,18 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if err != nil {
 		return err
 	}
-	if err := manager.Ensure(self, res.Directory); err != nil {
+	if err := manager.Up(); err != nil {
+		return err
+	}
+	peers, err := manager.Peers()
+	if err != nil {
+		// Pre-existing interface state isn't a hard failure on the very first
+		// iteration; treat the snapshot as empty and continue.
+		peers = nil
+	}
+	decision := controller.Update(self, res.Directory, peers, time.Now())
+	logRelayTransitions(p, res.Directory, decision, prevModes)
+	if err := manager.Apply(self, res.Directory, decision.Relayed); err != nil {
 		return err
 	}
 	if cfg.Observe.Enabled {
@@ -172,6 +200,45 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 		}
 	}
 	return nil
+}
+
+func logRelayTransitions(p *printer, dir directory.Directory, decision relay.Decision, prev map[string]relay.Mode) {
+	if len(decision.PeerStates) == 0 {
+		return
+	}
+	nameByKey := make(map[string]string, len(dir.Nodes))
+	for _, node := range dir.Nodes {
+		nameByKey[node.PublicKey] = node.Name
+	}
+	for key, state := range decision.PeerStates {
+		old, hadOld := prev[key]
+		if hadOld && old == state.Mode {
+			continue
+		}
+		name := nameByKey[key]
+		if name == "" {
+			name = key
+		}
+		switch state.Mode {
+		case relay.ModeRelayed:
+			via := ""
+			if decision.RelayTarget != nil {
+				via = decision.RelayTarget.Name
+			}
+			p.headline("relay: peer %q now routed via %s", name, via)
+		case relay.ModeDirect:
+			if hadOld && old == relay.ModeRelayed {
+				p.headline("relay: peer %q back to direct", name)
+			}
+		}
+		prev[key] = state.Mode
+	}
+	// Drop entries for peers no longer in the decision (removed from directory).
+	for key := range prev {
+		if _, still := decision.PeerStates[key]; !still {
+			delete(prev, key)
+		}
+	}
 }
 
 func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Manager, syncedSerial uint64, p *printer) error {
