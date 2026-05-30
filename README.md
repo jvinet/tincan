@@ -61,7 +61,7 @@ make build
 ```
 
 A statically-linked binary lands in `./bin/tincan`. Copy it to `/usr/local/bin`
-on your nodes.
+on your nodes. Verify with `tincan version`.
 
 ## Quick start
 
@@ -89,6 +89,9 @@ sudo tincan init \
 
 It prints all the generated keys to stdout, including the secrets you need to
 distribute. **Save these somewhere safe** — `init` does not.
+
+Pass `--force` to overwrite an existing config, or `--cache /path` to write
+the cache somewhere other than the default `/var/lib/tincan/cache.bin`.
 
 Now edit `/etc/tincan/config.toml` and fill in `[drop.admin]` (where this node
 writes the directory) and `[drop.client]` (how other nodes read it). For most
@@ -166,6 +169,9 @@ the WireGuard private key on stdin; alternatively:
 - `--private-key-file /path/to/key` — read it from a file
 - `--generate-key` — generate a fresh keypair locally and print the public key
   so the admin can `add-node --pubkey ...`
+
+Pass `--force` to overwrite an existing config, or `--cache /path` to use a
+non-default cache location.
 
 Edit the config and fill in:
 
