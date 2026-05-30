@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -95,6 +96,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	if err := bootstrap.Write(netbootPath, bootstrap.Network(&cfg)); err != nil {
 		return err
 	}
+	slog.Info("initialized admin node", "name", c.Name, "config", g.Config, "tunnel_ip", tunnelIP, "drop_type", c.DropType, "network_cidr", c.CIDR)
 	p := newPrinter(os.Stdout)
 	p.headline("initialized admin node %q", c.Name)
 	p.blank()

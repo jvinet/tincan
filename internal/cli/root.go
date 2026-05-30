@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/alecthomas/kong"
+	"github.com/jvinet/tincan/internal/logging"
 	"github.com/jvinet/tincan/internal/version"
 )
 
@@ -32,6 +33,7 @@ type App struct {
 }
 
 func Main(args []string) int {
+	logging.Init("tincan")
 	return run(args, os.Stdout, os.Stderr)
 }
 

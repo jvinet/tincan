@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
@@ -84,6 +85,7 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 	if err := config.Save(g.Config, cfg); err != nil {
 		return err
 	}
+	slog.Info("initialized client node", "name", nodeName, "config", g.Config, "from_bootstrap", bs != nil)
 	p := newPrinter(os.Stdout)
 	p.headline("initialized client node %q", nodeName)
 	p.blank()

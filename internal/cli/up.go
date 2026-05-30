@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -34,8 +35,10 @@ func (c *UpCmd) Run(ctx context.Context, g *Globals) error {
 	if c.Daemon && !daemon.IsChild() {
 		pid, err := daemon.Start(cfg.Sync.PIDFile, g.Config)
 		if err != nil {
+			slog.Error("daemon start failed", "error", err)
 			return err
 		}
+		slog.Info("daemon started", "pid", pid, "config", g.Config)
 		p := newPrinter(os.Stdout)
 		p.headline("started tincan daemon (pid: %d)", pid)
 		return nil
@@ -55,6 +58,7 @@ func (c *UpCmd) Run(ctx context.Context, g *Globals) error {
 }
 
 func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer) error {
+	slog.Info("up starting", "no_sync", noSync, "interface", cfg.Wireguard.Interface)
 	var dir directory.Directory
 	if noSync {
 		cached, _, err := cache.Read(cfg.Sync.Cache)
@@ -65,12 +69,14 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 	} else {
 		res, err := runSyncOnce(ctx, cfg, 30*time.Second)
 		if err != nil {
+			slog.Error("sync failed during up", "error", err)
 			return err
 		}
 		source := "drop"
 		if res.FromCache {
 			source = "local cache"
 		}
+		slog.Info("synced", "source", source, "serial", res.Serial)
 		p.headline("synced from %s (serial: %d)", source, res.Serial)
 		dir = res.Directory
 	}
@@ -87,8 +93,10 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 	}
 	p.headline("bringing up interface %s", cfg.Wireguard.Interface)
 	if err := manager.Apply(self, dir, nil); err != nil {
+		slog.Error("apply failed", "error", err)
 		return err
 	}
+	slog.Info("up complete", "interface", cfg.Wireguard.Interface, "tunnel_ip", self.TunnelIP, "peers", len(dir.Nodes)-1)
 	p.headline("setting IP address: %s", tunnelDisplay(self.TunnelIP, dir.NetworkCIDR))
 	return nil
 }
@@ -117,14 +125,17 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	startNetworkWatcher(watchCtx, configPath, controller, wakeCh, perr)
 	startAdminPreflight(configPath, pout)
 
+	slog.Info("daemon loop started", "pid", os.Getpid(), "config", configPath)
 	prevModes := map[string]relay.Mode{}
 	for {
 		cfg, err := config.Load(configPath)
 		if err != nil {
+			slog.Error("config load failed", "error", err, "path", configPath)
 			perr.fail("failed to load config; %v", err)
 		} else {
 			timeout := iterationTimeout(cfg.Sync.Interval.Or(config.DefaultInterval))
 			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes); err != nil {
+				slog.Warn("daemon iteration failed", "error", err)
 				perr.fail("daemon iteration failed; %v", err)
 			}
 		}
@@ -138,6 +149,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			if !timer.Stop() {
 				<-timer.C
 			}
+			slog.Info("daemon loop exiting", "reason", "context canceled")
 			return ctx.Err()
 		case sig := <-sigCh:
 			if !timer.Stop() {
@@ -145,9 +157,11 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			}
 			switch sig {
 			case syscall.SIGHUP:
+				slog.Info("received SIGHUP, reloading config and reconciling")
 				pout.hint("received SIGHUP, reloading config and reconciling")
 				continue
 			case syscall.SIGTERM, syscall.SIGINT:
+				slog.Info("received shutdown signal", "signal", sig.String())
 				pout.hint("received shutdown signal (%s)", sig.String())
 				return nil
 			}
@@ -155,6 +169,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			if !timer.Stop() {
 				<-timer.C
 			}
+			slog.Info("received wake, reconciling", "reason", reason)
 			pout.hint("received wake (%s), reconciling", reason)
 			continue
 		case <-timer.C:
@@ -171,6 +186,7 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if res.FromCache {
 		source = "local cache"
 	}
+	slog.Info("synced", "source", source, "serial", res.Serial)
 	p.headline("synced from %s (serial: %d)", source, res.Serial)
 	self, err := findSelf(cfg, res.Directory)
 	if err != nil {
@@ -194,6 +210,7 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if err := manager.Apply(self, res.Directory, decision.Relayed); err != nil {
 		return err
 	}
+	slog.Debug("applied directory", "serial", res.Serial, "peers", len(res.Directory.Nodes)-1, "relayed", len(decision.Relayed))
 	if cfg.Observe.Enabled {
 		if err := runAdminObservation(ctx, cfg, manager, res.Serial, p); err != nil {
 			return err
@@ -225,9 +242,11 @@ func logRelayTransitions(p *printer, dir directory.Directory, decision relay.Dec
 			if decision.RelayTarget != nil {
 				via = decision.RelayTarget.Name
 			}
+			slog.Info("relay transition", "peer", name, "mode", "relayed", "via", via)
 			p.headline("relay: peer %q now routed via %s", name, via)
 		case relay.ModeDirect:
 			if hadOld && old == relay.ModeRelayed {
+				slog.Info("relay transition", "peer", name, "mode", "direct")
 				p.headline("relay: peer %q back to direct", name)
 			}
 		}
@@ -272,6 +291,7 @@ func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Ma
 	if err := publishDirectory(ctx, cfg, d, updated, true); err != nil {
 		return err
 	}
+	slog.Info("republished after endpoint observation", "serial", updated.Serial)
 	p.headline("republished after endpoint observation (serial: %d)", updated.Serial)
 	return nil
 }

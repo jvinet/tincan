@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
@@ -84,6 +85,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 			return err
 		}
 	}
+	slog.Info("added node", "name", c.Name, "tunnel_ip", tunnelIP, "no_publish", c.NoPublish, "serial", dir.Serial)
 	p := newPrinter(os.Stdout)
 	p.headline("added node %q", c.Name)
 	p.blank()

@@ -5,9 +5,6 @@
   - Automatic gateway selection
 - Drops
   - DNS TXT
-- Get rid of the default-on log messages
-  - "time=2026-05-27T05:52:30.488Z level=WARN msg="failed to fetch remote directory before publish" error="dead-drop: not found"
-- Logging
 - Relay fallback
   - `[relay]` config block to opt out per-node and to tune `direct_failed_after`
     / `probe_interval` / `direct_grace_period` (currently hardcoded defaults).

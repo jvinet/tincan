@@ -235,6 +235,34 @@ Drop `--daemon` so the unit runs in the foreground and systemd owns the process.
 (The unit above runs a single iteration and exits; switch to a `oneshot` service
 with a systemd timer if you'd rather schedule it externally.)
 
+## Logging
+
+Tincan writes structured logs to the OS syslog (facility `daemon`, tag
+`tincan`) from every state-changing command and from the daemon loop. The
+human-friendly console output (`✓`, colored headlines, `tincan status`
+tables) is unchanged — syslog is separate and meant for debugging,
+monitoring, and log shipping.
+
+```
+May 29 18:23:01 zeroflux tincan[12345]: level=INFO msg=synced source=drop serial=76
+May 29 18:23:01 zeroflux tincan[12345]: level=INFO msg="relay transition" peer=tau mode=relayed via=zf
+```
+
+Set verbosity with `TINCAN_LOG_LEVEL` (`debug`, `info`, `warn`, `error`;
+default `info`). For systemd:
+
+```ini
+[Service]
+Environment=TINCAN_LOG_LEVEL=debug
+```
+
+Tail the daemon's recent activity:
+
+```sh
+journalctl -t tincan -f       # systemd-journald
+tail -f /var/log/daemon.log   # classic syslog
+```
+
 ## Endpoint discovery
 
 By default a NAT'd node can only reach peers whose `Endpoint` is set in the

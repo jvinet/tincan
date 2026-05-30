@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 
 	"github.com/jvinet/tincan/internal/wg"
@@ -24,11 +25,14 @@ func (c *DownCmd) Run(_ context.Context, g *Globals) error {
 	if err := manager.Teardown(); err != nil {
 		var notFound netlink.LinkNotFoundError
 		if errors.As(err, &notFound) {
+			slog.Info("interface already down", "interface", cfg.Wireguard.Interface)
 			p.headline("interface %s is already down", cfg.Wireguard.Interface)
 			return nil
 		}
+		slog.Error("teardown failed", "interface", cfg.Wireguard.Interface, "error", err)
 		return err
 	}
+	slog.Info("brought down interface", "interface", cfg.Wireguard.Interface)
 	p.headline("bringing down interface %s", cfg.Wireguard.Interface)
 	return nil
 }

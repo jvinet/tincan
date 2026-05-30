@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -38,9 +39,11 @@ func startNetworkWatcher(ctx context.Context, configPath string, controller *rel
 		done := make(chan struct{})
 		defer close(done)
 		if err := netlink.AddrSubscribeWithOptions(updates, done, netlink.AddrSubscribeOptions{}); err != nil {
+			slog.Error("netlink subscribe failed", "error", err)
 			perr.fail("netlink subscribe failed; relay probe on network change disabled: %v", err)
 			return
 		}
+		slog.Debug("network watcher subscribed", "iface_filter", iface)
 		for {
 			select {
 			case <-ctx.Done():
@@ -53,8 +56,10 @@ func startNetworkWatcher(ctx context.Context, configPath string, controller *rel
 					return
 				}
 				if !tracker.observe(update) {
+					slog.Debug("netlink event deduped", "link_index", update.LinkIndex, "addr", update.LinkAddress.String(), "new", update.NewAddr)
 					continue
 				}
+				slog.Info("network change detected", "link_index", update.LinkIndex, "addr", update.LinkAddress.String(), "new", update.NewAddr)
 				controller.MarkNetChanged()
 				select {
 				case wakeCh <- "local network changed":

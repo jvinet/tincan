@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"log/slog"
 	"os"
 	"strings"
 
@@ -23,6 +24,7 @@ func startAdminPreflight(configPath string, pout *printer) {
 		return // not an admin — no preflight needed
 	}
 	if !ipForwardEnabled() {
+		slog.Warn("admin preflight: net.ipv4.ip_forward disabled")
 		pout.warn("net.ipv4.ip_forward is not enabled; peers that fall back to admin-relay will not reach each other. " +
 			"Enable with: sysctl -w net.ipv4.ip_forward=1 (persist via /etc/sysctl.d/)")
 	}

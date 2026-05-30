@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/jvinet/tincan/internal/cache"
@@ -47,6 +48,7 @@ func (c *RemoveNodeCmd) Run(ctx context.Context, g *Globals) error {
 			return err
 		}
 	}
+	slog.Info("removed node", "name", c.Name, "freed_ip", node.TunnelIP, "no_publish", c.NoPublish, "serial", dir.Serial)
 	p := newPrinter(os.Stdout)
 	p.headline("removed node %q", c.Name)
 	p.blank()
