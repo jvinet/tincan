@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
@@ -67,11 +68,17 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 	c.netChangedOnce = false
 
 	if self.Endpoint != "" {
+		slog.Debug("relay: skipping decision (self has endpoint)", "self", self.Name)
 		c.states = make(map[string]PeerState)
 		return Decision{}
 	}
 
 	target := pickRelayTarget(dir, self.PublicKey)
+	if target == nil {
+		slog.Debug("relay: no relay target available (no peer with public endpoint)")
+	} else {
+		slog.Debug("relay: target selected", "target", target.Name, "endpoint", target.Endpoint)
+	}
 
 	peerByKey := indexPeers(peers)
 	newStates := make(map[string]PeerState, len(dir.Nodes))
@@ -83,12 +90,19 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 		}
 		// Peers with an operator-configured public endpoint don't need relay.
 		if node.Endpoint != "" {
+			slog.Debug("relay: peer ineligible (has public endpoint)", "peer", node.Name)
 			newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
 			continue
 		}
 		// Can't relay if there's no relay target, or the peer itself IS the
 		// relay target.
-		if target == nil || node.PublicKey == target.PublicKey {
+		if target == nil {
+			slog.Debug("relay: peer forced direct (no relay target)", "peer", node.Name)
+			newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
+			continue
+		}
+		if node.PublicKey == target.PublicKey {
+			slog.Debug("relay: peer forced direct (is relay target)", "peer", node.Name)
 			newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
 			continue
 		}
@@ -100,18 +114,20 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 
 		pub, err := keys.ParseWGPublic(node.PublicKey)
 		if err != nil {
-			// Bad data — fall back to direct so we don't strand the peer.
+			slog.Warn("relay: invalid peer public key, forcing direct", "peer", node.Name, "error", err)
 			newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
 			continue
 		}
 
+		kernelPeer := peerByKey[pub]
 		next := Decide(Inputs{
 			Now:             now,
 			Previous:        prev,
-			Peer:            peerByKey[pub],
+			Peer:            kernelPeer,
 			Node:            node,
 			LocalNetChanged: netChanged,
 		}, c.cfg)
+		logDecision(node, prev, next, kernelPeer, netChanged, now)
 		newStates[node.PublicKey] = next
 		if next.Mode == ModeRelayed {
 			relayed[node.PublicKey] = true
@@ -124,6 +140,25 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 		PeerStates:  newStates,
 		RelayTarget: target,
 	}
+}
+
+func logDecision(node directory.Node, prev, next PeerState, kp wgtypes.Peer, netChanged bool, now time.Time) {
+	handshakeAge := "never"
+	if !kp.LastHandshakeTime.IsZero() {
+		handshakeAge = now.Sub(kp.LastHandshakeTime).Round(time.Second).String()
+	}
+	slog.Debug("relay: per-peer decision",
+		"peer", node.Name,
+		"prev_mode", prev.Mode.String(),
+		"next_mode", next.Mode.String(),
+		"in_mode_for", now.Sub(prev.EnteredAt).Round(time.Second).String(),
+		"handshake_age", handshakeAge,
+		"tx_bytes", kp.TransmitBytes,
+		"tx_growth", kp.TransmitBytes-prev.LastTxBytes,
+		"observed_endpoint", node.ObservedEndpoint,
+		"prev_observed_endpoint", prev.LastObservedEndpoint,
+		"local_net_changed", netChanged,
+	)
 }
 
 // pickRelayTarget returns the first node in the directory (excluding self)

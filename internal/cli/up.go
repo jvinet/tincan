@@ -210,13 +210,37 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if err := manager.Apply(self, res.Directory, decision.Relayed); err != nil {
 		return err
 	}
-	slog.Debug("applied directory", "serial", res.Serial, "peers", len(res.Directory.Nodes)-1, "relayed", len(decision.Relayed))
+	relayedNames := relayedPeerNames(res.Directory, decision.Relayed)
+	relayVia := ""
+	if decision.RelayTarget != nil {
+		relayVia = decision.RelayTarget.Name
+	}
+	slog.Debug("applied directory",
+		"serial", res.Serial,
+		"peers", len(res.Directory.Nodes)-1,
+		"relayed_count", len(decision.Relayed),
+		"relayed_peers", relayedNames,
+		"relay_target", relayVia,
+	)
 	if cfg.Observe.Enabled {
 		if err := runAdminObservation(ctx, cfg, manager, res.Serial, p); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func relayedPeerNames(dir directory.Directory, relayed map[string]bool) []string {
+	if len(relayed) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(relayed))
+	for _, node := range dir.Nodes {
+		if relayed[node.PublicKey] {
+			names = append(names, node.Name)
+		}
+	}
+	return names
 }
 
 func logRelayTransitions(p *printer, dir directory.Directory, decision relay.Decision, prev map[string]relay.Mode) {
