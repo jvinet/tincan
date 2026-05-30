@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/daemon"
 	"github.com/jvinet/tincan/internal/directory"
+	"github.com/jvinet/tincan/internal/discovery"
 	"github.com/jvinet/tincan/internal/relay"
 	"github.com/jvinet/tincan/internal/wg"
 )
@@ -125,6 +127,15 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	startNetworkWatcher(watchCtx, configPath, wakeCh, perr)
 	startAdminPreflight(configPath, pout)
 
+	var dirHolder atomic.Pointer[directory.Directory]
+	dirSource := func() directory.Directory {
+		if p := dirHolder.Load(); p != nil {
+			return *p
+		}
+		return directory.Directory{}
+	}
+	lanStore := startDiscovery(watchCtx, configPath, dirSource, wakeCh, perr)
+
 	slog.Info("daemon loop started", "pid", os.Getpid(), "config", configPath)
 	prevModes := map[string]relay.Mode{}
 	for {
@@ -134,7 +145,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			perr.fail("failed to load config; %v", err)
 		} else {
 			timeout := iterationTimeout(cfg.Sync.Interval.Or(config.DefaultInterval))
-			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes); err != nil {
+			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes, lanStore, &dirHolder); err != nil {
 				slog.Warn("daemon iteration failed", "error", err)
 				perr.fail("daemon iteration failed; %v", err)
 			}
@@ -177,7 +188,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	}
 }
 
-func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer, controller *relay.Controller, prevModes map[string]relay.Mode) error {
+func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer, controller *relay.Controller, prevModes map[string]relay.Mode, lanStore *discovery.Store, dirHolder *atomic.Pointer[directory.Directory]) error {
 	res, err := runSyncOnce(ctx, cfg, timeout)
 	if err != nil {
 		return err
@@ -188,6 +199,10 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	}
 	slog.Info("synced", "source", source, "serial", res.Serial)
 	p.headline("synced from %s (serial: %d)", source, res.Serial)
+	if dirHolder != nil {
+		dirCopy := res.Directory
+		dirHolder.Store(&dirCopy)
+	}
 	self, err := findSelf(cfg, res.Directory)
 	if err != nil {
 		return err
@@ -209,6 +224,14 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	logRelayTransitions(p, res.Directory, decision, prevModes)
 	if err := manager.Apply(self, res.Directory, decision.Relayed); err != nil {
 		return err
+	}
+	if lanStore != nil {
+		if port, err := manager.ListenPort(); err == nil {
+			lanStore.SetSelf(self.PublicKey, port)
+		}
+		if err := cache.WriteDiscovery(cfg.Sync.Cache, lanStore.Snapshot()); err != nil {
+			slog.Debug("write discovery state failed", "error", err)
+		}
 	}
 	relayedNames := relayedPeerNames(res.Directory, decision.Relayed)
 	relayVia := ""
@@ -318,6 +341,42 @@ func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Ma
 	slog.Info("republished after endpoint observation", "serial", updated.Serial)
 	p.headline("republished after endpoint observation (serial: %d)", updated.Serial)
 	return nil
+}
+
+// startDiscovery launches the LAN discovery goroutines if discovery is
+// enabled in the config. Returns nil (with a logged warning) if discovery
+// is disabled, the config can't be loaded, or the listeners/senders fail
+// to initialize — the daemon continues without LAN discovery in that case.
+func startDiscovery(ctx context.Context, configPath string, dirSource discovery.DirectorySource, wakeCh chan<- string, perr *printer) *discovery.Store {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		slog.Debug("discovery setup skipped (config not loadable)", "error", err)
+		return nil
+	}
+	if !cfg.Discovery.IsEnabled() {
+		slog.Info("discovery disabled in config")
+		return nil
+	}
+	dCfg := discovery.Config{
+		MulticastIPv4:   cfg.Discovery.MulticastIPv4,
+		MulticastIPv6:   cfg.Discovery.MulticastIPv6,
+		BeaconInterval:  cfg.Discovery.BeaconInterval.Or(config.DefaultDiscoveryBeaconInterval),
+		BeaconTTL:       cfg.Discovery.BeaconTTL.Or(config.DefaultDiscoveryBeaconTTL),
+		InterfaceFilter: cfg.Wireguard.Interface,
+	}
+	store, err := discovery.Start(ctx, dCfg, dirSource, wakeCh)
+	if err != nil {
+		slog.Warn("discovery start failed", "error", err)
+		perr.fail("discovery start failed; %v", err)
+		return nil
+	}
+	slog.Info("discovery started",
+		"ipv4", dCfg.MulticastIPv4,
+		"ipv6", dCfg.MulticastIPv6,
+		"interval", dCfg.BeaconInterval,
+		"ttl", dCfg.BeaconTTL,
+	)
+	return store
 }
 
 func iterationTimeout(interval time.Duration) time.Duration {

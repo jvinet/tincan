@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/google/renameio/v2"
@@ -24,6 +26,12 @@ func Default() Config {
 			Interval: NewDuration(DefaultInterval),
 			Cache:    DefaultCachePath,
 			PIDFile:  DefaultPIDFile,
+		},
+		Discovery: DiscoveryConfig{
+			MulticastIPv4:  DefaultDiscoveryMulticastIPv4,
+			MulticastIPv6:  DefaultDiscoveryMulticastIPv6,
+			BeaconInterval: NewDuration(DefaultDiscoveryBeaconInterval),
+			BeaconTTL:      NewDuration(DefaultDiscoveryBeaconTTL),
 		},
 	}
 }
@@ -117,6 +125,18 @@ func (c *Config) ApplyDefaults() {
 	if c.Sync.PIDFile == "" {
 		c.Sync.PIDFile = DefaultPIDFile
 	}
+	if c.Discovery.MulticastIPv4 == "" {
+		c.Discovery.MulticastIPv4 = DefaultDiscoveryMulticastIPv4
+	}
+	if c.Discovery.MulticastIPv6 == "" {
+		c.Discovery.MulticastIPv6 = DefaultDiscoveryMulticastIPv6
+	}
+	if !c.Discovery.BeaconInterval.Set {
+		c.Discovery.BeaconInterval = NewDuration(DefaultDiscoveryBeaconInterval)
+	}
+	if !c.Discovery.BeaconTTL.Set {
+		c.Discovery.BeaconTTL = NewDuration(DefaultDiscoveryBeaconTTL)
+	}
 }
 
 func applyBackendDefaults(b *DropBackend) {
@@ -181,6 +201,52 @@ func (c Config) Validate(allowIncomplete bool) error {
 	}
 	if err := validateDropBackend(c.Drop.Client); err != nil {
 		return fmt.Errorf("[drop.client]: %w", err)
+	}
+	if err := validateDiscovery(c.Discovery); err != nil {
+		return fmt.Errorf("[discovery]: %w", err)
+	}
+	return nil
+}
+
+func validateDiscovery(d DiscoveryConfig) error {
+	if err := validateMulticastAddr(d.MulticastIPv4, false); err != nil {
+		return fmt.Errorf("multicast_ipv4: %w", err)
+	}
+	if err := validateMulticastAddr(d.MulticastIPv6, true); err != nil {
+		return fmt.Errorf("multicast_ipv6: %w", err)
+	}
+	interval := d.BeaconInterval.Or(DefaultDiscoveryBeaconInterval)
+	ttl := d.BeaconTTL.Or(DefaultDiscoveryBeaconTTL)
+	if interval <= 0 {
+		return errors.New("beacon_interval must be positive")
+	}
+	if ttl < 2*interval {
+		return fmt.Errorf("beacon_ttl (%s) must be at least 2x beacon_interval (%s)", ttl, interval)
+	}
+	return nil
+}
+
+func validateMulticastAddr(addr string, wantV6 bool) error {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("parse %q: %w", addr, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		return fmt.Errorf("invalid port in %q", addr)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("invalid IP in %q", addr)
+	}
+	if !ip.IsMulticast() {
+		return fmt.Errorf("%s is not a multicast address", host)
+	}
+	if wantV6 && ip.To4() != nil {
+		return fmt.Errorf("%s is not an IPv6 address", host)
+	}
+	if !wantV6 && ip.To4() == nil {
+		return fmt.Errorf("%s is not an IPv4 address", host)
 	}
 	return nil
 }

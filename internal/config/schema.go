@@ -15,6 +15,11 @@ const (
 	DefaultMTU        = 1420
 	DefaultInterval   = 5 * time.Minute
 	DefaultNetwork    = "10.42.0.0/24"
+
+	DefaultDiscoveryMulticastIPv4  = "239.255.84.67:51821"
+	DefaultDiscoveryMulticastIPv6  = "[ff02::1:8443]:51821"
+	DefaultDiscoveryBeaconInterval = 30 * time.Second
+	DefaultDiscoveryBeaconTTL      = 90 * time.Second
 )
 
 type Config struct {
@@ -23,6 +28,7 @@ type Config struct {
 	Drop      DropConfig      `toml:"drop"`
 	Sync      SyncConfig      `toml:"sync"`
 	Observe   ObserveConfig   `toml:"observe,omitempty"`
+	Discovery DiscoveryConfig `toml:"discovery,omitempty"`
 }
 
 type WireguardConfig struct {
@@ -83,6 +89,25 @@ type ObserveConfig struct {
 	RefreshInterval OptionalDuration `toml:"refresh_interval,omitempty"`
 }
 
+// DiscoveryConfig governs LAN peer discovery via multicast beacons.
+// See spec/lan-discovery.md.
+type DiscoveryConfig struct {
+	Enabled        *bool            `toml:"enabled,omitempty"`
+	MulticastIPv4  string           `toml:"multicast_ipv4,omitempty"`
+	MulticastIPv6  string           `toml:"multicast_ipv6,omitempty"`
+	BeaconInterval OptionalDuration `toml:"beacon_interval,omitempty"`
+	BeaconTTL      OptionalDuration `toml:"beacon_ttl,omitempty"`
+}
+
+// IsEnabled reports whether LAN discovery should run. Discovery defaults to
+// enabled when the [discovery] section is absent or omits the field.
+func (d DiscoveryConfig) IsEnabled() bool {
+	if d.Enabled == nil {
+		return true
+	}
+	return *d.Enabled
+}
+
 type OptionalDuration struct {
 	Duration time.Duration
 	Set      bool
@@ -137,4 +162,8 @@ func StatePath(cachePath string) string {
 
 func SerialPath(cachePath string) string {
 	return filepath.Join(filepath.Dir(cachePath), "cache.serial")
+}
+
+func DiscoveryStatePath(cachePath string) string {
+	return filepath.Join(filepath.Dir(cachePath), "discovery.json")
 }

@@ -28,6 +28,7 @@ type statusOutput struct {
 	Daemon     map[string]interface{} `json:"daemon"`
 	Drop       map[string]interface{} `json:"drop"`
 	WireGuard  map[string]interface{} `json:"wireguard"`
+	Discovery  map[string]interface{} `json:"discovery,omitempty"`
 	NATWarning string                 `json:"nat_warning,omitempty"`
 }
 
@@ -93,6 +94,9 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		out.Cache["last_sync"] = state.LastSync
 		out.Cache["age"] = time.Since(state.LastSync).Truncate(time.Second).String()
 		out.Cache["etag"] = state.LastETag
+	}
+	if dState, err := cache.ReadDiscovery(cfg.Sync.Cache); err == nil {
+		out.Discovery = discoveryStatusFields(dState, nodesByPubkey)
 	}
 	if pid, err := daemon.ReadPID(cfg.Sync.PIDFile); err == nil {
 		out.Daemon["pid"] = pid
@@ -291,6 +295,12 @@ func printStatusText(out statusOutput) {
 	p.section("WireGuard")
 	p.pairs(statusWireguardPairs(out.WireGuard)...)
 
+	if len(out.Discovery) > 0 {
+		p.blank()
+		p.section("Discovery")
+		p.pairs(statusDiscoveryPairs(out.Discovery)...)
+	}
+
 	if peers, ok := out.WireGuard["peers"].([]statusPeer); ok && len(peers) > 0 {
 		p.blank()
 		p.section("Peers")
@@ -375,6 +385,50 @@ func statusDropPairs(m map[string]interface{}) []pair {
 	}
 	if v, ok := m["error"].(string); ok && v != "" {
 		pairs = append(pairs, kv("error", v))
+	}
+	return pairs
+}
+
+func discoveryStatusFields(state cache.DiscoveryState, nodesByPubkey map[string]directory.Node) map[string]interface{} {
+	out := map[string]interface{}{
+		"updated_at": state.UpdatedAt,
+	}
+	type entry struct {
+		Name      string    `json:"name,omitempty"`
+		PublicKey string    `json:"public_key"`
+		Endpoint  string    `json:"endpoint"`
+		LearnedAt time.Time `json:"learned_at,omitzero"`
+		FailedAt  time.Time `json:"failed_at,omitzero"`
+		Stale     bool      `json:"stale,omitempty"`
+	}
+	entries := make([]entry, 0, len(state.LANEndpoints))
+	for pubkey, lan := range state.LANEndpoints {
+		e := entry{
+			PublicKey: pubkey,
+			Endpoint:  lan.Endpoint,
+			LearnedAt: lan.LearnedAt,
+			FailedAt:  lan.FailedAt,
+		}
+		if !lan.FailedAt.IsZero() && !lan.FailedAt.Before(lan.LearnedAt) {
+			e.Stale = true
+		}
+		if node, ok := nodesByPubkey[pubkey]; ok {
+			e.Name = node.Name
+		}
+		entries = append(entries, e)
+	}
+	out["lan_endpoints"] = entries
+	out["count"] = len(entries)
+	return out
+}
+
+func statusDiscoveryPairs(m map[string]interface{}) []pair {
+	pairs := []pair{}
+	if v, ok := m["count"].(int); ok {
+		pairs = append(pairs, kv("lan endpoints learned", fmt.Sprintf("%d", v)))
+	}
+	if v, ok := m["updated_at"].(time.Time); ok && !v.IsZero() {
+		pairs = append(pairs, kv("snapshot age", time.Since(v).Truncate(time.Second).String()))
 	}
 	return pairs
 }

@@ -140,6 +140,26 @@ func (m *Manager) Peers() ([]wgtypes.Peer, error) {
 	return dev.Peers, nil
 }
 
+// ListenPort returns the WireGuard listen port currently in use. If the
+// device was configured with ListenPort = 0, this reports the ephemeral
+// port the kernel selected. Returns 0 with no error before the device has
+// been fully configured.
+func (m *Manager) ListenPort() (uint16, error) {
+	client, err := wgctrl.New()
+	if err != nil {
+		return 0, fmt.Errorf("open wgctrl: %w", err)
+	}
+	defer client.Close()
+	dev, err := client.Device(m.iface)
+	if err != nil {
+		return 0, fmt.Errorf("read wireguard device: %w", err)
+	}
+	if dev.ListenPort < 0 || dev.ListenPort > 65535 {
+		return 0, fmt.Errorf("listen port %d out of range", dev.ListenPort)
+	}
+	return uint16(dev.ListenPort), nil
+}
+
 func (m *Manager) Teardown() error {
 	link, err := netlink.LinkByName(m.iface)
 	if err != nil {

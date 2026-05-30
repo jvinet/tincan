@@ -10,6 +10,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	golang.org/x/net v0.48.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 )
 
@@ -34,7 +35,6 @@ require (
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect

@@ -13,6 +13,7 @@ import (
 	"github.com/google/renameio/v2"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
+	"github.com/jvinet/tincan/internal/discovery"
 )
 
 type State struct {
@@ -83,6 +84,42 @@ func ReadState(cachePath string) (State, error) {
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
 		return State{}, fmt.Errorf("decode state: %w", err)
+	}
+	return state, nil
+}
+
+// DiscoveryState wraps a LAN discovery snapshot for persistence next to
+// state.json. The daemon writes it each iteration so `tincan status` can
+// surface what's been learned without holding open a control socket.
+type DiscoveryState struct {
+	UpdatedAt    time.Time                   `json:"updated_at"`
+	LANEndpoints map[string]discovery.LANState `json:"lan_endpoints"`
+}
+
+func WriteDiscovery(cachePath string, snapshot map[string]discovery.LANState) error {
+	if err := ensureDir(cachePath); err != nil {
+		return err
+	}
+	state := DiscoveryState{UpdatedAt: time.Now().UTC(), LANEndpoints: snapshot}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode discovery state: %w", err)
+	}
+	data = append(data, '\n')
+	if err := renameio.WriteFile(config.DiscoveryStatePath(cachePath), data, 0o600); err != nil {
+		return fmt.Errorf("write discovery state: %w", err)
+	}
+	return nil
+}
+
+func ReadDiscovery(cachePath string) (DiscoveryState, error) {
+	data, err := os.ReadFile(config.DiscoveryStatePath(cachePath))
+	if err != nil {
+		return DiscoveryState{}, err
+	}
+	var state DiscoveryState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return DiscoveryState{}, fmt.Errorf("decode discovery state: %w", err)
 	}
 	return state, nil
 }
