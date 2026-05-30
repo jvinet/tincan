@@ -40,6 +40,10 @@ older than the one they already cached, which protects against rollback.
 - Optional endpoint discovery: an admin node can observe NAT'd peers'
   source endpoints and republish them so NAT'd peers can reach each other
   directly (UDP hole punching). See [Endpoint discovery](#endpoint-discovery).
+- Automatic relay fallback: when a NAT'd peer-to-peer path can't be
+  established (symmetric NAT, same-LAN hairpin, etc.) clients route the
+  affected peer's traffic through the admin node and continue to re-probe
+  the direct path on network changes. See [Relay fallback](#relay-fallback).
 
 ## Requirements
 
@@ -260,12 +264,55 @@ then fall back to the admin's observation.
 Hole punching works for most consumer NATs (full-cone, restricted-cone,
 port-restricted). It does **not** work for symmetric NAT (some carrier-grade
 NAT, some corporate firewalls) — the admin's observed port differs from the
-port the peer would have to use to reach you. For those, an admin-as-relay
-fallback is the only option (not yet implemented).
+port the peer would have to use to reach you. Two peers behind the same
+residential router are similarly weak: they share the same observed public
+IP and require the router to hairpin UDP traffic back inside the LAN, which
+many consumer routers don't do reliably. In both cases the [relay
+fallback](#relay-fallback) takes over automatically.
 
-Two peers behind the same residential router are also a known weak spot:
-they share the same observed public IP and require the router to hairpin UDP
-traffic back inside the LAN, which many consumer routers don't do reliably.
+## Relay fallback
+
+If the direct peer-to-peer path stays broken (no handshake for ~90s while
+keepalives go out), each client switches that peer to **relayed** mode:
+the peer is removed from the local WireGuard config and the admin's
+`AllowedIPs` is widened to cover the peer's tunnel IP, so packets flow
+through the admin instead. Other peers reachable directly are unaffected.
+
+While relayed, clients periodically re-probe the direct path:
+
+- every 5 minutes, opportunistically
+- immediately when the admin republishes a new `ObservedEndpoint` for the
+  peer (e.g. the peer moved networks)
+- immediately when the local machine's IP addresses change (e.g. a laptop
+  joined a different wifi network) — detected via netlink
+
+If a probe succeeds, the peer reverts to direct routing. If not, it falls
+back to relayed and waits for the next signal or interval.
+
+To enable the relay role, the admin node must allow IP forwarding:
+
+```sh
+sysctl -w net.ipv4.ip_forward=1
+# persistent:
+echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/99-tincan.conf
+```
+
+The admin daemon warns on startup if forwarding is off. There is no
+client-side configuration — relay fallback is on by default for every
+non-admin node.
+
+`tincan status` shows the chosen mode per peer (`direct` or `relayed via X`).
+Per-peer mode lives in daemon memory; on daemon restart all peers start in
+direct mode and converge to relayed within ~90s if the direct path is
+broken.
+
+### Limitations
+
+- A single relay target is chosen — the first non-self node in the
+  directory with an `Endpoint` set. Multi-relay topologies and explicit
+  relay-role selection aren't supported yet.
+- If the admin/relay node itself is unreachable, relayed peers are
+  unreachable too. The relay isn't a failover for the admin being down.
 
 ## Dead-drop backends
 
