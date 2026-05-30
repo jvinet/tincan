@@ -51,9 +51,14 @@ func TestPeerEndpointLabelPriority(t *testing.T) {
 		exact    string
 	}{
 		{
-			name:  "wgctrl wins",
-			peer:  statusPeer{Endpoint: "10.0.0.1:51820", DirectoryEndpoint: "ignored", ObservedEndpoint: "203.0.113.7:5555"},
-			exact: "10.0.0.1:51820",
+			name:  "wgctrl wins (public)",
+			peer:  statusPeer{Endpoint: "198.51.100.42:51820", DirectoryEndpoint: "ignored", ObservedEndpoint: "203.0.113.7:5555"},
+			exact: "198.51.100.42:51820",
+		},
+		{
+			name:  "wgctrl private endpoint labeled lan",
+			peer:  statusPeer{Endpoint: "192.168.1.42:51820"},
+			exact: "192.168.1.42:51820 (lan)",
 		},
 		{
 			name:  "directory configured shown when wgctrl missing",

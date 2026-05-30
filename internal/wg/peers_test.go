@@ -44,7 +44,7 @@ func peerByAllowedIP(peers []wgtypes.PeerConfig, ip string) *wgtypes.PeerConfig 
 
 func TestBuildPeerConfigsSelfSkippedAndAllowedIPs(t *testing.T) {
 	self, dir := peerFixture(t)
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestBuildPeerConfigsSelfSkippedAndAllowedIPs(t *testing.T) {
 
 func TestBuildPeerConfigsEndpointResolved(t *testing.T) {
 	self, dir := peerFixture(t)
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestBuildPeerConfigsEndpointResolved(t *testing.T) {
 
 func TestBuildPeerConfigsKeepaliveDefaultsAndOverrides(t *testing.T) {
 	self, dir := peerFixture(t)
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestBuildPeerConfigsKeepaliveDefaultsAndOverrides(t *testing.T) {
 	}
 
 	self.Endpoint = "alice.example.com:51820"
-	peers, err = BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil)
+	peers, err = BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestBuildPeerConfigsKeepaliveDefaultsAndOverrides(t *testing.T) {
 	}
 
 	cfg := config.WireguardConfig{Keepalive: config.NewDuration(10 * time.Second)}
-	peers, err = BuildPeerConfigs(cfg, self, dir, nil)
+	peers, err = BuildPeerConfigs(cfg, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestBuildPeerConfigsKeepaliveDefaultsAndOverrides(t *testing.T) {
 
 	self.Endpoint = ""
 	cfg = config.WireguardConfig{Keepalive: config.NewDuration(0)}
-	peers, err = BuildPeerConfigs(cfg, self, dir, nil)
+	peers, err = BuildPeerConfigs(cfg, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,19 +137,19 @@ func TestBuildPeerConfigsKeepaliveDefaultsAndOverrides(t *testing.T) {
 func TestBuildPeerConfigsRejectsBadPeerData(t *testing.T) {
 	self, dir := peerFixture(t)
 	dir.Nodes[1].PublicKey = "not a key"
-	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil); err == nil {
+	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil); err == nil {
 		t.Fatal("expected invalid peer key error")
 	}
 
 	self, dir = peerFixture(t)
 	dir.Nodes[1].TunnelIP = "not an ip"
-	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil); err == nil {
+	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil); err == nil {
 		t.Fatal("expected invalid tunnel IP error")
 	}
 
 	self, dir = peerFixture(t)
 	dir.Nodes[1].Endpoint = "not-a-host-port"
-	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil); err == nil {
+	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil); err == nil {
 		t.Fatal("expected invalid endpoint error")
 	}
 
@@ -157,7 +157,7 @@ func TestBuildPeerConfigsRejectsBadPeerData(t *testing.T) {
 	dir.Nodes[2].Endpoint = ""
 	dir.Nodes[2].ObservedEndpoint = "not-a-host-port"
 	dir.Nodes[2].ObservedAt = time.Now()
-	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil); err == nil {
+	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil); err == nil {
 		t.Fatal("expected invalid observed endpoint error")
 	}
 }
@@ -205,7 +205,55 @@ func TestChooseEndpoint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := chooseEndpoint(tc.node, now)
+			got := chooseEndpoint(tc.node, now, nil)
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChooseEndpointLANPrecedence(t *testing.T) {
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	fresh := now.Add(-ObservedEndpointTTL / 2)
+
+	pk := "PEER-PUBKEY"
+	lan := func(p string) string {
+		if p == pk {
+			return "192.168.1.42:51820"
+		}
+		return ""
+	}
+
+	cases := []struct {
+		name string
+		node directory.Node
+		want string
+	}{
+		{
+			name: "operator endpoint still wins over LAN",
+			node: directory.Node{PublicKey: pk, Endpoint: "host:1234", ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			want: "host:1234",
+		},
+		{
+			name: "LAN preferred over observed when operator empty",
+			node: directory.Node{PublicKey: pk, ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			want: "192.168.1.42:51820",
+		},
+		{
+			name: "LAN used even when observed is empty",
+			node: directory.Node{PublicKey: pk},
+			want: "192.168.1.42:51820",
+		},
+		{
+			name: "no LAN for unknown peer falls back to observed",
+			node: directory.Node{PublicKey: "other-pubkey", ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			want: "203.0.113.7:5555",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := chooseEndpoint(tc.node, now, lan)
 			if got != tc.want {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
@@ -218,7 +266,7 @@ func TestBuildPeerConfigsAppliesObservedEndpoint(t *testing.T) {
 	dir.Nodes[2].Endpoint = ""
 	dir.Nodes[2].ObservedEndpoint = "127.0.0.1:51900"
 	dir.Nodes[2].ObservedAt = time.Now()
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +284,7 @@ func TestBuildPeerConfigsIgnoresStaleObservedEndpoint(t *testing.T) {
 	dir.Nodes[2].Endpoint = ""
 	dir.Nodes[2].ObservedEndpoint = "127.0.0.1:51900"
 	dir.Nodes[2].ObservedAt = time.Now().Add(-ObservedEndpointTTL - time.Minute)
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +311,7 @@ func TestBuildPeerConfigsKeepaliveAndAllowedIPs(t *testing.T) {
 		self,
 		{Name: "bob", PublicKey: peerPub, TunnelIP: "10.42.0.2"},
 	}}
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +325,7 @@ func TestBuildPeerConfigsKeepaliveAndAllowedIPs(t *testing.T) {
 		t.Fatalf("keepalive=%v", peers[0].PersistentKeepaliveInterval)
 	}
 	self.Endpoint = "vpn.example.com:51820"
-	peers, err = BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil)
+	peers, err = BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +378,7 @@ func TestBuildPeerConfigsRelayFoldsAllowedIPs(t *testing.T) {
 	dir.Nodes[2].ObservedAt = time.Now()
 	relayed := map[string]bool{dir.Nodes[2].PublicKey: true} // carol
 
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, relayed)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, relayed, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +421,7 @@ func TestBuildPeerConfigsRelaySkippedWhenNoTarget(t *testing.T) {
 	dir.Nodes[1].Endpoint = ""
 	relayed := map[string]bool{dir.Nodes[2].PublicKey: true}
 
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, relayed)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, relayed, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +439,7 @@ func TestBuildPeerConfigsRelayDoesNotRelayTheTarget(t *testing.T) {
 		dir.Nodes[2].PublicKey: true, // carol
 	}
 
-	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, relayed)
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, relayed, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

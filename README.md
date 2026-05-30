@@ -346,6 +346,44 @@ broken.
 - If the admin/relay node itself is unreachable, relayed peers are
   unreachable too. The relay isn't a failover for the admin being down.
 
+## LAN peer discovery
+
+Two NAT'd peers behind the same router would otherwise route through the
+relay (the home router rarely hairpins UDP). LAN discovery cuts that out:
+each daemon publishes a UDP multicast beacon on the local link
+advertising its WireGuard pubkey and listen port; the receiving daemon
+pairs the source IP with the announced port to learn a candidate LAN
+endpoint and points WireGuard at it directly.
+
+There's no admin coordination — discovery is purely client-to-client on
+the LAN. Authentication is implicit: a spoofed beacon causes one failed
+handshake (the attacker doesn't have the private key) and falls back to
+the relay; nothing leaks. See `spec/lan-discovery.md` for the full
+protocol.
+
+Enabled by default. Disable per-node by setting `[discovery].enabled =
+false`. Status output tags LAN-direct peers with `(lan)` after their
+endpoint, and `tincan status --json` exposes the learned endpoints under
+`.discovery`:
+
+```sh
+tincan status --json | jq '.discovery.lan_endpoints'
+```
+
+Defaults: IPv4 group `239.255.84.67:51821`, IPv6 `[ff02::1:8443]:51821`,
+30-second beacon cadence, 90-second endpoint TTL. Most networks don't
+need to touch these.
+
+### Limitations
+
+- Multicast must propagate on the LAN. Wi-Fi access points with client
+  isolation enabled (common in hotels, some corporate networks) drop
+  beacons. Discovery fails silently in that case and the relay carries on.
+- VLAN-segregated guest networks behind one NAT see each other as same-
+  `oep` but can't reach each other on the LAN. Same fallback.
+- Only one LAN endpoint per peer is tracked; multi-homed peers (Wi-Fi +
+  Ethernet on the same device) settle to whichever beacon arrives first.
+
 ## Dead-drop backends
 
 Every config has two drop sections: `[drop.admin]` is how this node writes the
@@ -446,6 +484,13 @@ pid_file = "/run/tincan.pid"
 enabled          = false       # default off; flip to true to discover NAT'd peer endpoints
 handshake_fresh  = "3m"        # how recent a peer handshake must be to count as observed
 refresh_interval = "15m"       # how often to refresh ObservedAt for unchanged endpoints
+
+[discovery]                    # LAN peer discovery via multicast beacons
+enabled         = true         # default on; set false to suppress beacon send/receive
+multicast_ipv4  = "239.255.84.67:51821"
+multicast_ipv6  = "[ff02::1:8443]:51821"
+beacon_interval = "30s"        # steady-state cadence
+beacon_ttl      = "90s"        # learned endpoint expiry (must be >= 2x beacon_interval)
 ```
 
 Defaults are populated automatically; you usually only need to set
@@ -457,6 +502,7 @@ Defaults are populated automatically; you usually only need to set
 - `/var/lib/tincan/cache.bin` — last successfully-applied directory
 - `/var/lib/tincan/cache.serial` — monotonic serial guard against rollback
 - `/var/lib/tincan/state.json` — sync metadata (last sync time, ETag)
+- `/var/lib/tincan/discovery.json` — learned LAN endpoints (see "LAN peer discovery")
 - `/var/lib/tincan/directory-source.bin` — admin-only working directory
 - `/var/lib/tincan/netboot.json` — admin-only network bootstrap (mode `0600`)
 - `/run/tincan.pid` — daemon PID file

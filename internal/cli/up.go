@@ -94,7 +94,7 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 		return err
 	}
 	p.headline("bringing up interface %s", cfg.Wireguard.Interface)
-	if err := manager.Apply(self, dir, nil); err != nil {
+	if err := manager.Apply(self, dir, nil, nil); err != nil {
 		slog.Error("apply failed", "error", err)
 		return err
 	}
@@ -221,8 +221,17 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 		peers = nil
 	}
 	decision := controller.Update(self, res.Directory, peers, time.Now())
+	if lanStore != nil {
+		markLANFailures(decision.PeerStates, prevModes, lanStore, time.Now())
+	}
 	logRelayTransitions(p, res.Directory, decision, prevModes)
-	if err := manager.Apply(self, res.Directory, decision.Relayed); err != nil {
+	var lanLookup wg.LANEndpointLookup
+	if lanStore != nil {
+		lanLookup = func(pubkey string) string {
+			return lanStore.Lookup(pubkey, time.Now())
+		}
+	}
+	if err := manager.Apply(self, res.Directory, decision.Relayed, lanLookup); err != nil {
 		return err
 	}
 	if lanStore != nil {
@@ -251,6 +260,23 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 		}
 	}
 	return nil
+}
+
+// markLANFailures invalidates LAN endpoints for peers that just transitioned
+// DIRECT → RELAYED. The kernel was using whatever chooseEndpoint picked
+// (operator > LAN > observed), and a stale-handshake transition is the
+// signal that endpoint isn't working. Blacklisting clears on the next
+// beacon that arrives, by virtue of LearnedAt > FailedAt.
+func markLANFailures(states map[string]relay.PeerState, prev map[string]relay.Mode, lanStore *discovery.Store, now time.Time) {
+	for key, state := range states {
+		old, hadOld := prev[key]
+		if !hadOld {
+			continue
+		}
+		if old == relay.ModeDirect && state.Mode == relay.ModeRelayed {
+			lanStore.MarkFailed(key, now)
+		}
+	}
 }
 
 func relayedPeerNames(dir directory.Directory, relayed map[string]bool) []string {

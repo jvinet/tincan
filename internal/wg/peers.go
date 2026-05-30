@@ -15,6 +15,11 @@ import (
 
 const ObservedEndpointTTL = 30 * time.Minute
 
+// LANEndpointLookup returns a learned LAN endpoint (host:port) for the
+// given peer pubkey, or "" if none is known/usable. Pass nil to
+// BuildPeerConfigs to disable LAN preference entirely.
+type LANEndpointLookup func(pubkey string) string
+
 // BuildPeerConfigs translates the directory into a list of WireGuard
 // PeerConfigs for self's interface. When relayed is non-empty, the listed
 // peers (by public key string) become "shadow peers": their tunnel IPs are
@@ -29,7 +34,12 @@ const ObservedEndpointTTL = 30 * time.Minute
 // public Endpoint set. If relayed is empty or no relay target exists,
 // every peer in the directory gets its own AllowedIPs and behaves
 // directly.
-func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir directory.Directory, relayed map[string]bool) ([]wgtypes.PeerConfig, error) {
+//
+// lanLookup, when non-nil, is consulted to obtain a per-peer LAN endpoint
+// learned via the discovery package. LAN endpoints rank above
+// admin-observed endpoints but below operator-configured ones in
+// chooseEndpoint's precedence.
+func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir directory.Directory, relayed map[string]bool, lanLookup LANEndpointLookup) ([]wgtypes.PeerConfig, error) {
 	selfHasEndpoint := self.Endpoint != ""
 	keepalive := time.Duration(0)
 	if cfg.Keepalive.Set {
@@ -78,7 +88,7 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 		} else {
 			peer.AllowedIPs = []net.IPNet{*tunnel}
 		}
-		endpointStr := chooseEndpoint(node, time.Now())
+		endpointStr := chooseEndpoint(node, time.Now(), lanLookup)
 		if endpointStr != "" {
 			endpoint, err := net.ResolveUDPAddr("udp", endpointStr)
 			if err != nil {
@@ -102,9 +112,14 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 	return peers, nil
 }
 
-func chooseEndpoint(node directory.Node, now time.Time) string {
+func chooseEndpoint(node directory.Node, now time.Time, lanLookup LANEndpointLookup) string {
 	if node.Endpoint != "" {
 		return node.Endpoint
+	}
+	if lanLookup != nil {
+		if lan := lanLookup(node.PublicKey); lan != "" {
+			return lan
+		}
 	}
 	if node.ObservedEndpoint == "" || node.ObservedAt.IsZero() {
 		return ""

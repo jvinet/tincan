@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -166,6 +167,9 @@ func peerEndpointLabel(peer statusPeer) string {
 		return "via relay"
 	}
 	if peer.Endpoint != "" {
+		if isPrivateEndpoint(peer.Endpoint) {
+			return peer.Endpoint + " (lan)"
+		}
 		return peer.Endpoint
 	}
 	if peer.DirectoryEndpoint != "" {
@@ -179,6 +183,28 @@ func peerEndpointLabel(peer statusPeer) string {
 		return peer.ObservedEndpoint + " (" + suffix + ")"
 	}
 	return "-"
+}
+
+// isPrivateEndpoint reports whether the host portion of a host:port endpoint
+// is in RFC1918, IPv4 link-local, or IPv6 ULA / link-local space — i.e., the
+// peer is reachable on a local link rather than across the public internet.
+// Used to tag DIRECT peers as (lan) in status output.
+func isPrivateEndpoint(endpoint string) bool {
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsPrivate() {
+		return true
+	}
+	if ip.IsLinkLocalUnicast() {
+		return true
+	}
+	return false
 }
 
 func wireGuardPeerStatus(peers []wgtypes.Peer, dir directory.Directory, self directory.Node) []statusPeer {
