@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 )
 
 const (
@@ -11,8 +13,46 @@ const (
 	EnvConfig = "_TINCAN_CONFIG"
 )
 
+// ErrNotRunning reports that there is no live daemon to act on — either the PID
+// file is absent or the process it records is gone. Callers can treat it as a
+// no-op rather than a failure.
+var ErrNotRunning = errors.New("daemon not running")
+
 func IsChild() bool {
 	return os.Getenv(EnvMarker) == "1"
+}
+
+// Stop signals the daemon recorded in pidFile to shut down (SIGTERM) and waits
+// up to `wait` for the process to exit, returning the PID it signaled.
+//
+// It returns ErrNotRunning when there is nothing to stop. If the process is
+// still alive after `wait` — typically because the daemon is finishing an
+// in-progress sync before it next checks for signals — Stop returns a non-nil
+// error along with the PID, and the caller must not assume the daemon stopped.
+func Stop(pidFile string, wait time.Duration) (int, error) {
+	pid, err := ReadPID(pidFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, ErrNotRunning
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !PIDAlive(pid) {
+		return pid, ErrNotRunning
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return pid, fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		if !PIDAlive(pid) {
+			return pid, nil
+		}
+		if !time.Now().Before(deadline) {
+			return pid, fmt.Errorf("daemon (pid %d) signaled but still running after %s", pid, wait)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func Start(pidFile string, configPath string) (int, error) {

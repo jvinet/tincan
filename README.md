@@ -195,6 +195,7 @@ the interface:
 sudo tincan sync           # fetch the latest directory and cache it
 sudo tincan up --no-sync   # apply that cache to the interface
 sudo tincan down           # tear the interface down
+sudo tincan down --stop    # tear the interface down and stop the daemon too
 ```
 
 ### 4. Verify
@@ -217,6 +218,12 @@ Signals the daemon understands:
 
 - `SIGHUP` — reload `config.toml` and run an iteration immediately
 - `SIGTERM` / `SIGINT` — clean shutdown
+
+`tincan down --stop` sends `SIGTERM` to the PID-file process and waits for it to
+exit before tearing down the interface, so the daemon can't re-apply the
+directory and re-raise the link on its way out. Plain `tincan down` leaves the
+daemon running (it will simply bring the interface back up on its next
+reconcile).
 
 For systemd, prefer a plain service rather than `--daemon`:
 
