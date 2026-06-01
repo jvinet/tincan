@@ -8,10 +8,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
-const (
-	DefaultHandshakeFresh  = 3 * time.Minute
-	DefaultRefreshInterval = 15 * time.Minute
-)
+const DefaultHandshakeFresh = 3 * time.Minute
 
 // MergeObservations updates each directory node's ObservedEndpoint/ObservedAt
 // based on what the admin's WireGuard interface currently sees about each
@@ -22,17 +19,18 @@ const (
 //   - Nodes with an operator-configured Endpoint are left untouched (operator
 //     intent wins over discovery).
 //   - If wgctrl has a recent handshake from the peer (within handshakeFresh)
-//     and we've never observed it before, or the observed endpoint string
-//     differs from the published one, or the published ObservedAt is older
-//     than refreshInterval, the observation is recorded.
+//     and the observed source endpoint differs from what's published (which
+//     includes the first-ever observation), the new endpoint is recorded.
+//   - If wgctrl has a recent handshake but the observed endpoint is unchanged,
+//     the node is left untouched — we deliberately do NOT re-stamp ObservedAt.
+//     Clients trust a published observed endpoint for as long as it stays in
+//     the directory (there is no client-side TTL), so re-stamping would only
+//     churn the serial and force a needless republish.
 //   - If wgctrl has no recent handshake but a prior observation exists in the
 //     directory, it is cleared so clients stop trying a stale endpoint.
-func MergeObservations(dir directory.Directory, peers []wgtypes.Peer, now time.Time, handshakeFresh, refreshInterval time.Duration) (directory.Directory, bool) {
+func MergeObservations(dir directory.Directory, peers []wgtypes.Peer, now time.Time, handshakeFresh time.Duration) (directory.Directory, bool) {
 	if handshakeFresh <= 0 {
 		handshakeFresh = DefaultHandshakeFresh
-	}
-	if refreshInterval <= 0 {
-		refreshInterval = DefaultRefreshInterval
 	}
 
 	byKey := make(map[wgtypes.Key]wgtypes.Peer, len(peers))
@@ -62,10 +60,11 @@ func MergeObservations(dir directory.Directory, peers []wgtypes.Peer, now time.T
 
 		if hasFreshHandshake {
 			observed := peer.Endpoint.String()
-			endpointChanged := n.ObservedEndpoint != observed
-			firstObservation := n.ObservedAt.IsZero()
-			needsRefresh := !firstObservation && now.Sub(n.ObservedAt) >= refreshInterval
-			if endpointChanged || firstObservation || needsRefresh {
+			// Only record a genuinely new endpoint (this also covers the first
+			// observation, where ObservedEndpoint is still empty). An unchanged
+			// endpoint is left as-is: re-stamping ObservedAt would bump the
+			// serial and republish without changing any routing.
+			if n.ObservedEndpoint != observed {
 				n.ObservedEndpoint = observed
 				n.ObservedAt = nowUTC
 				changed = true

@@ -71,8 +71,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	}
 	cfg.Drop = config.SkeletonDrop(c.DropType)
 	cfg.Observe = config.ObserveConfig{
-		HandshakeFresh:  config.NewDuration(admin.DefaultHandshakeFresh),
-		RefreshInterval: config.NewDuration(admin.DefaultRefreshInterval),
+		HandshakeFresh: config.NewDuration(admin.DefaultHandshakeFresh),
 	}
 	dir := directory.Directory{
 		SchemaVersion: directory.SchemaVersion,

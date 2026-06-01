@@ -349,8 +349,7 @@ func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Ma
 		return err
 	}
 	handshakeFresh := cfg.Observe.HandshakeFresh.Or(admin.DefaultHandshakeFresh)
-	refreshInterval := cfg.Observe.RefreshInterval.Or(admin.DefaultRefreshInterval)
-	updated, changed := admin.MergeObservations(source, peers, time.Now(), handshakeFresh, refreshInterval)
+	updated, changed := admin.MergeObservations(source, peers, time.Now(), handshakeFresh)
 	if !changed {
 		return nil
 	}
@@ -364,8 +363,13 @@ func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Ma
 	if err := publishDirectory(ctx, cfg, d, updated, true); err != nil {
 		return err
 	}
-	slog.Info("republished after endpoint observation", "serial", updated.Serial)
-	p.headline("republished after endpoint observation (serial: %d)", updated.Serial)
+	diff := directory.Compare(source, updated)
+	slog.Info("republished after endpoint observation",
+		"prev_serial", source.Serial,
+		"serial", updated.Serial,
+		"changes", diff.Summary(),
+	)
+	p.headline("republished after endpoint observation (serial: %d): %s", updated.Serial, diff.Summary())
 	return nil
 }
 

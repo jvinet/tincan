@@ -163,9 +163,7 @@ func TestBuildPeerConfigsRejectsBadPeerData(t *testing.T) {
 }
 
 func TestChooseEndpoint(t *testing.T) {
-	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
-	fresh := now.Add(-ObservedEndpointTTL / 2)
-	stale := now.Add(-ObservedEndpointTTL - time.Second)
+	old := time.Date(2026, 5, 27, 6, 0, 0, 0, time.UTC) // hours ago; must not matter
 
 	cases := []struct {
 		name string
@@ -174,38 +172,33 @@ func TestChooseEndpoint(t *testing.T) {
 	}{
 		{
 			name: "configured wins over observed",
-			node: directory.Node{Endpoint: "host:1234", ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			node: directory.Node{Endpoint: "host:1234", ObservedEndpoint: "203.0.113.7:5555", ObservedAt: old},
 			want: "host:1234",
 		},
 		{
-			name: "observed used when configured empty and fresh",
-			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			name: "observed used when configured empty",
+			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555", ObservedAt: old},
 			want: "203.0.113.7:5555",
 		},
 		{
-			name: "observed ignored when stale",
-			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555", ObservedAt: stale},
-			want: "",
+			name: "observed used however old the observation (no TTL)",
+			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555", ObservedAt: time.Time{}.Add(time.Second)},
+			want: "203.0.113.7:5555",
 		},
 		{
-			name: "observed ignored when ObservedAt zero",
+			name: "observed used even when ObservedAt is zero (timestamp no longer gates routing)",
 			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555"},
-			want: "",
+			want: "203.0.113.7:5555",
 		},
 		{
 			name: "no observed endpoint",
 			node: directory.Node{},
 			want: "",
 		},
-		{
-			name: "observed fresh at exact TTL boundary",
-			node: directory.Node{ObservedEndpoint: "203.0.113.7:5555", ObservedAt: now.Add(-ObservedEndpointTTL)},
-			want: "203.0.113.7:5555",
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := chooseEndpoint(tc.node, now, nil)
+			got := chooseEndpoint(tc.node, nil)
 			if got != tc.want {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
@@ -214,9 +207,6 @@ func TestChooseEndpoint(t *testing.T) {
 }
 
 func TestChooseEndpointLANPrecedence(t *testing.T) {
-	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
-	fresh := now.Add(-ObservedEndpointTTL / 2)
-
 	pk := "PEER-PUBKEY"
 	lan := func(p string) string {
 		if p == pk {
@@ -232,12 +222,12 @@ func TestChooseEndpointLANPrecedence(t *testing.T) {
 	}{
 		{
 			name: "operator endpoint still wins over LAN",
-			node: directory.Node{PublicKey: pk, Endpoint: "host:1234", ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			node: directory.Node{PublicKey: pk, Endpoint: "host:1234", ObservedEndpoint: "203.0.113.7:5555"},
 			want: "host:1234",
 		},
 		{
 			name: "LAN preferred over observed when operator empty",
-			node: directory.Node{PublicKey: pk, ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			node: directory.Node{PublicKey: pk, ObservedEndpoint: "203.0.113.7:5555"},
 			want: "192.168.1.42:51820",
 		},
 		{
@@ -247,13 +237,13 @@ func TestChooseEndpointLANPrecedence(t *testing.T) {
 		},
 		{
 			name: "no LAN for unknown peer falls back to observed",
-			node: directory.Node{PublicKey: "other-pubkey", ObservedEndpoint: "203.0.113.7:5555", ObservedAt: fresh},
+			node: directory.Node{PublicKey: "other-pubkey", ObservedEndpoint: "203.0.113.7:5555"},
 			want: "203.0.113.7:5555",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := chooseEndpoint(tc.node, now, lan)
+			got := chooseEndpoint(tc.node, lan)
 			if got != tc.want {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
@@ -279,21 +269,24 @@ func TestBuildPeerConfigsAppliesObservedEndpoint(t *testing.T) {
 	}
 }
 
-func TestBuildPeerConfigsIgnoresStaleObservedEndpoint(t *testing.T) {
+func TestBuildPeerConfigsAppliesOldObservedEndpoint(t *testing.T) {
 	self, dir := peerFixture(t)
 	dir.Nodes[2].Endpoint = ""
 	dir.Nodes[2].ObservedEndpoint = "127.0.0.1:51900"
-	dir.Nodes[2].ObservedAt = time.Now().Add(-ObservedEndpointTTL - time.Minute)
+	// An observation from long ago: there is no client-side TTL, so it is
+	// still applied. Recovery from a genuinely dead endpoint is the relay
+	// controller's job, not this function's.
+	dir.Nodes[2].ObservedAt = time.Now().Add(-24 * time.Hour)
 	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	carol := peerByAllowedIP(peers, "10.42.0.3")
-	if carol == nil {
-		t.Fatal("carol peer missing")
+	if carol == nil || carol.Endpoint == nil {
+		t.Fatalf("carol endpoint missing: %+v", carol)
 	}
-	if carol.Endpoint != nil {
-		t.Fatalf("stale observed endpoint should be ignored, got %v", carol.Endpoint)
+	if !carol.Endpoint.IP.Equal(net.ParseIP("127.0.0.1")) || carol.Endpoint.Port != 51900 {
+		t.Fatalf("carol endpoint=%v", carol.Endpoint)
 	}
 }
 

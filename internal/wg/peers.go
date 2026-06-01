@@ -13,8 +13,6 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
-const ObservedEndpointTTL = 30 * time.Minute
-
 // LANEndpointLookup returns a learned LAN endpoint (host:port) for the
 // given peer pubkey, or "" if none is known/usable. Pass nil to
 // BuildPeerConfigs to disable LAN preference entirely.
@@ -88,7 +86,7 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 		} else {
 			peer.AllowedIPs = []net.IPNet{*tunnel}
 		}
-		endpointStr := chooseEndpoint(node, time.Now(), lanLookup)
+		endpointStr := chooseEndpoint(node, lanLookup)
 		if endpointStr != "" {
 			endpoint, err := net.ResolveUDPAddr("udp", endpointStr)
 			if err != nil {
@@ -112,7 +110,7 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 	return peers, nil
 }
 
-func chooseEndpoint(node directory.Node, now time.Time, lanLookup LANEndpointLookup) string {
+func chooseEndpoint(node directory.Node, lanLookup LANEndpointLookup) string {
 	if node.Endpoint != "" {
 		return node.Endpoint
 	}
@@ -121,11 +119,9 @@ func chooseEndpoint(node directory.Node, now time.Time, lanLookup LANEndpointLoo
 			return lan
 		}
 	}
-	if node.ObservedEndpoint == "" || node.ObservedAt.IsZero() {
-		return ""
-	}
-	if now.Sub(node.ObservedAt) > ObservedEndpointTTL {
-		return ""
-	}
+	// An admin-observed endpoint is trusted for as long as it remains in the
+	// directory. There is no client-side staleness TTL: the publishing admin
+	// clears ObservedEndpoint once a peer stops handshaking, and a dead
+	// endpoint is recovered via relay (handshake-driven), not by expiry here.
 	return node.ObservedEndpoint
 }

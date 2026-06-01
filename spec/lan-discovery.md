@@ -45,7 +45,7 @@ and doesn't require introducing a tunnel-internal control plane.
 | Beacon cadence | 30s steady-state; initial burst of 3 over 5s on startup; on-receipt response when a known pubkey is unfamiliar (rate-limited to 1/peer/5s) |
 | Egress interface(s) | Every non-loopback, non-Tincan link with at least one global-scope IPv4 or IPv6 address |
 | New WG state? | **No.** LAN endpoint is just another candidate in `chooseEndpoint` precedence |
-| Endpoint precedence | `Endpoint > LANEndpoint (fresh) > ObservedEndpoint (within TTL) > empty` |
+| Endpoint precedence | `Endpoint > LANEndpoint (fresh) > ObservedEndpoint > empty` |
 | LAN endpoint TTL | 90s since last beacon (3× cadence) |
 | Invalidation on failure | Entering `RELAYED` for a peer marks that peer's LAN endpoint as failed; next beacon re-validates |
 | Directory schema | **No change.** Discovery is purely client-local |

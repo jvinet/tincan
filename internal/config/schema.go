@@ -84,8 +84,13 @@ type SyncConfig struct {
 }
 
 type ObserveConfig struct {
-	Enabled         bool             `toml:"enabled,omitempty"`
-	HandshakeFresh  OptionalDuration `toml:"handshake_fresh,omitempty"`
+	Enabled        bool             `toml:"enabled,omitempty"`
+	HandshakeFresh OptionalDuration `toml:"handshake_fresh,omitempty"`
+	// RefreshInterval is deprecated and ignored. The admin no longer
+	// periodically re-stamps ObservedAt: an unchanged observed endpoint is
+	// left untouched, and clients trust it for as long as it stays published.
+	// The field is retained so existing configs that set it still load (the
+	// decoder rejects unknown keys); new configs omit it.
 	RefreshInterval OptionalDuration `toml:"refresh_interval,omitempty"`
 }
 

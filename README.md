@@ -481,9 +481,8 @@ cache    = "/var/lib/tincan/cache.bin"
 pid_file = "/run/tincan.pid"
 
 [observe]                      # admin-only; see Endpoint discovery
-enabled          = false       # default off; flip to true to discover NAT'd peer endpoints
-handshake_fresh  = "3m"        # how recent a peer handshake must be to count as observed
-refresh_interval = "15m"       # how often to refresh ObservedAt for unchanged endpoints
+enabled         = false        # default off; flip to true to discover NAT'd peer endpoints
+handshake_fresh = "3m"         # how recent a peer handshake must be to count as observed
 
 [discovery]                    # LAN peer discovery via multicast beacons
 enabled         = true         # default on; set false to suppress beacon send/receive
