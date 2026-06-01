@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/jvinet/tincan/internal/cache"
@@ -350,26 +348,25 @@ func printStatusText(out statusOutput) {
 	if peers, ok := out.WireGuard["peers"].([]statusPeer); ok && len(peers) > 0 {
 		p.blank()
 		p.section("Peers")
-		// tabwriter.StripEscape lets us wrap ANSI codes in \xff markers so
-		// they're stripped on output but don't count toward column width
-		// — without this the dim-styled header throws off all alignment.
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.StripEscape)
-		headers := []string{"PEER", "ENDPOINT", "HANDSHAKE", "STATUS", "RX", "TX"}
-		for i, h := range headers {
-			headers[i] = dimCell(p, h)
-		}
-		fmt.Fprintln(w, "  "+strings.Join(headers, "\t"))
+		rows := [][]tableCell{{
+			p.styledCell(ansiDim, "PEER"),
+			p.styledCell(ansiDim, "ENDPOINT"),
+			p.styledCell(ansiDim, "HANDSHAKE"),
+			p.styledCell(ansiDim, "STATUS"),
+			p.styledCell(ansiDim, "RX"),
+			p.styledCell(ansiDim, "TX"),
+		}}
 		for _, peer := range peers {
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%d\t%d\n",
-				peerLabel(peer),
-				peerEndpointLabel(peer),
-				peerHandshakeLabel(peer),
-				peerStatusLabel(peer),
-				peer.ReceiveBytes,
-				peer.TransmitBytes,
-			)
+			rows = append(rows, []tableCell{
+				plainCell(peerLabel(peer)),
+				plainCell(peerEndpointLabel(peer)),
+				plainCell(peerHandshakeLabel(peer)),
+				plainCell(peerStatusLabel(peer)),
+				plainCell(fmt.Sprintf("%d", peer.ReceiveBytes)),
+				plainCell(fmt.Sprintf("%d", peer.TransmitBytes)),
+			})
 		}
-		_ = w.Flush()
+		p.table("  ", "  ", rows)
 	}
 	if out.NATWarning != "" {
 		p.blank()

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -51,16 +52,56 @@ func (p *printer) style(code, s string) string {
 	return code + s + ansiReset
 }
 
-// dimCell returns s wrapped in a dim ANSI escape, surrounded by tabwriter's
-// escape markers (\xff) so the styled cell aligns correctly inside a
-// tabwriter.NewWriter created with the tabwriter.StripEscape flag. Without
-// the markers, tabwriter counts the ANSI bytes as visible width and the
-// header row drifts away from the data rows.
-func dimCell(p *printer, s string) string {
-	if !p.color {
-		return s
+// tableCell pairs a display string (which may contain ANSI escapes) with
+// its visible width in runes. Used by printer.table to align styled headers
+// with unstyled data cells — stdlib text/tabwriter can't do this since its
+// escape mechanism is for protecting tabs/newlines from being interpreted
+// as cell separators, not for hiding bytes from the width calculation.
+type tableCell struct {
+	display string
+	width   int
+}
+
+func plainCell(s string) tableCell {
+	return tableCell{display: s, width: utf8.RuneCountInString(s)}
+}
+
+func (p *printer) styledCell(code, s string) tableCell {
+	return tableCell{display: p.style(code, s), width: utf8.RuneCountInString(s)}
+}
+
+// table renders rows of cells into aligned columns. All rows must have the
+// same length; widths auto-size to the widest visible content per column.
+// indent is prepended to every row; gap is inserted between cells.
+func (p *printer) table(indent, gap string, rows [][]tableCell) {
+	if len(rows) == 0 {
+		return
 	}
-	return "\xff" + ansiDim + "\xff" + s + "\xff" + ansiReset + "\xff"
+	nCols := len(rows[0])
+	widths := make([]int, nCols)
+	for _, row := range rows {
+		for i, c := range row {
+			if i >= nCols {
+				break
+			}
+			if c.width > widths[i] {
+				widths[i] = c.width
+			}
+		}
+	}
+	for _, row := range rows {
+		fmt.Fprint(p.w, indent)
+		for i, c := range row {
+			fmt.Fprint(p.w, c.display)
+			if i < nCols-1 {
+				if pad := widths[i] - c.width; pad > 0 {
+					fmt.Fprint(p.w, strings.Repeat(" ", pad))
+				}
+				fmt.Fprint(p.w, gap)
+			}
+		}
+		fmt.Fprintln(p.w)
+	}
 }
 
 func (p *printer) blank() {
