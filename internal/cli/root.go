@@ -45,6 +45,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		kong.Writers(stdout, stderr),
 		kong.BindTo(context.Background(), (*context.Context)(nil)),
 		kong.UsageOnError(),
+		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
 	)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
