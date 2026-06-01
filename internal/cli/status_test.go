@@ -56,9 +56,9 @@ func TestPeerEndpointLabelPriority(t *testing.T) {
 			exact: "198.51.100.42:51820",
 		},
 		{
-			name:  "wgctrl private endpoint labeled lan",
+			name:  "wgctrl private endpoint shown raw (lan/wan distinction now in STATUS)",
 			peer:  statusPeer{Endpoint: "192.168.1.42:51820"},
-			exact: "192.168.1.42:51820 (lan)",
+			exact: "192.168.1.42:51820",
 		},
 		{
 			name:  "directory configured shown when wgctrl missing",
@@ -81,14 +81,14 @@ func TestPeerEndpointLabelPriority(t *testing.T) {
 			exact: "-",
 		},
 		{
-			name:  "relayed shows via target",
-			peer:  statusPeer{Mode: "relayed", RelayVia: "zf"},
-			exact: "via zf",
+			name:  "relayed peer with kernel endpoint shows that endpoint (status column carries via X)",
+			peer:  statusPeer{Mode: "relayed", RelayVia: "zf", Endpoint: "203.0.113.7:5555"},
+			exact: "203.0.113.7:5555",
 		},
 		{
-			name:  "relayed without target name",
-			peer:  statusPeer{Mode: "relayed"},
-			exact: "via relay",
+			name:  "relayed peer with no kernel endpoint falls through to dash",
+			peer:  statusPeer{Mode: "relayed", RelayVia: "zf"},
+			exact: "-",
 		},
 	}
 	for _, tc := range cases {
@@ -99,6 +99,80 @@ func TestPeerEndpointLabelPriority(t *testing.T) {
 			}
 			if tc.contains != "" && !startsWith(got, tc.contains) {
 				t.Fatalf("got %q want prefix %q", got, tc.contains)
+			}
+		})
+	}
+}
+
+func TestPeerStatusLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		peer statusPeer
+		want string
+	}{
+		{
+			name: "direct public endpoint",
+			peer: statusPeer{Mode: "direct", Endpoint: "198.51.100.42:51820"},
+			want: "DIRECT",
+		},
+		{
+			name: "direct private endpoint labeled LAN",
+			peer: statusPeer{Mode: "direct", Endpoint: "192.168.1.42:51820"},
+			want: "LAN",
+		},
+		{
+			name: "direct ULA endpoint labeled LAN",
+			peer: statusPeer{Mode: "direct", Endpoint: "[fc00::1]:51820"},
+			want: "LAN",
+		},
+		{
+			name: "direct without endpoint",
+			peer: statusPeer{Mode: "direct"},
+			want: "DIRECT",
+		},
+		{
+			name: "empty mode treated as direct",
+			peer: statusPeer{Endpoint: "198.51.100.42:51820"},
+			want: "DIRECT",
+		},
+		{
+			name: "relayed with target",
+			peer: statusPeer{Mode: "relayed", RelayVia: "zf"},
+			want: "RELAYED via zf",
+		},
+		{
+			name: "relayed without target",
+			peer: statusPeer{Mode: "relayed"},
+			want: "RELAYED",
+		},
+		{
+			name: "relayed beats LAN even when probing private endpoint",
+			peer: statusPeer{Mode: "relayed", RelayVia: "zf", Endpoint: "192.168.1.42:51820"},
+			want: "RELAYED via zf",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := peerStatusLabel(tc.peer); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPeerHandshakeLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		peer statusPeer
+		want string
+	}{
+		{name: "with age", peer: statusPeer{LastHandshakeAge: "53s"}, want: "53s ago"},
+		{name: "no age", peer: statusPeer{}, want: "never"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := peerHandshakeLabel(tc.peer); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
 			}
 		})
 	}

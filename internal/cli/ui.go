@@ -51,6 +51,18 @@ func (p *printer) style(code, s string) string {
 	return code + s + ansiReset
 }
 
+// dimCell returns s wrapped in a dim ANSI escape, surrounded by tabwriter's
+// escape markers (\xff) so the styled cell aligns correctly inside a
+// tabwriter.NewWriter created with the tabwriter.StripEscape flag. Without
+// the markers, tabwriter counts the ANSI bytes as visible width and the
+// header row drifts away from the data rows.
+func dimCell(p *printer, s string) string {
+	if !p.color {
+		return s
+	}
+	return "\xff" + ansiDim + "\xff" + s + "\xff" + ansiReset + "\xff"
+}
+
 func (p *printer) blank() {
 	fmt.Fprintln(p.w)
 }

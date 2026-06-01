@@ -160,16 +160,7 @@ func peerLabel(peer statusPeer) string {
 }
 
 func peerEndpointLabel(peer statusPeer) string {
-	if peer.Mode == "relayed" {
-		if peer.RelayVia != "" {
-			return "via " + peer.RelayVia
-		}
-		return "via relay"
-	}
 	if peer.Endpoint != "" {
-		if isPrivateEndpoint(peer.Endpoint) {
-			return peer.Endpoint + " (lan)"
-		}
 		return peer.Endpoint
 	}
 	if peer.DirectoryEndpoint != "" {
@@ -183,6 +174,35 @@ func peerEndpointLabel(peer statusPeer) string {
 		return peer.ObservedEndpoint + " (" + suffix + ")"
 	}
 	return "-"
+}
+
+// peerStatusLabel collapses (Mode, Endpoint, RelayVia) into the single
+// STATUS cell. Precedence:
+//   - RELAYED via X (or just RELAYED) when the daemon has the peer in
+//     relayed mode — that's the routing reality, regardless of what the
+//     shadow peer is probing.
+//   - LAN when direct mode and the kernel's endpoint is in private space.
+//   - DIRECT otherwise.
+func peerStatusLabel(peer statusPeer) string {
+	if peer.Mode == "relayed" {
+		if peer.RelayVia != "" {
+			return "RELAYED via " + peer.RelayVia
+		}
+		return "RELAYED"
+	}
+	if peer.Endpoint != "" && isPrivateEndpoint(peer.Endpoint) {
+		return "LAN"
+	}
+	return "DIRECT"
+}
+
+// peerHandshakeLabel returns the age suffix shown in the HANDSHAKE column.
+// "never" for peers that have not yet completed a handshake.
+func peerHandshakeLabel(peer statusPeer) string {
+	if peer.LastHandshakeAge != "" {
+		return peer.LastHandshakeAge + " ago"
+	}
+	return "never"
 }
 
 // isPrivateEndpoint reports whether the host portion of a host:port endpoint
@@ -330,22 +350,24 @@ func printStatusText(out statusOutput) {
 	if peers, ok := out.WireGuard["peers"].([]statusPeer); ok && len(peers) > 0 {
 		p.blank()
 		p.section("Peers")
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "  "+p.style(ansiDim, "PEER\tENDPOINT\tALLOWED IPS\tLAST HANDSHAKE\tRX\tTX\tKEEPALIVE"))
+		// tabwriter.StripEscape lets us wrap ANSI codes in \xff markers so
+		// they're stripped on output but don't count toward column width
+		// — without this the dim-styled header throws off all alignment.
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.StripEscape)
+		headers := []string{"PEER", "ENDPOINT", "HANDSHAKE", "STATUS", "RX", "TX"}
+		for i, h := range headers {
+			headers[i] = dimCell(p, h)
+		}
+		fmt.Fprintln(w, "  "+strings.Join(headers, "\t"))
 		for _, peer := range peers {
-			handshake := "-"
-			if peer.LastHandshake != nil {
-				handshake = peer.LastHandshake.Format(time.RFC3339)
-				if peer.LastHandshakeAge != "" {
-					handshake += " (" + peer.LastHandshakeAge + " ago)"
-				}
-			}
-			keepalive := peer.PersistentKeepalive
-			if keepalive == "" {
-				keepalive = "-"
-			}
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%d\t%d\t%s\n",
-				peerLabel(peer), peerEndpointLabel(peer), strings.Join(peer.AllowedIPs, ","), handshake, peer.ReceiveBytes, peer.TransmitBytes, keepalive)
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%d\t%d\n",
+				peerLabel(peer),
+				peerEndpointLabel(peer),
+				peerHandshakeLabel(peer),
+				peerStatusLabel(peer),
+				peer.ReceiveBytes,
+				peer.TransmitBytes,
+			)
 		}
 		_ = w.Flush()
 	}
