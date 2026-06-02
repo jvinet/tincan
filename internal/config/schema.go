@@ -68,6 +68,16 @@ type DropBackend struct {
 	Password string `toml:"password,omitempty"`
 
 	Path string `toml:"path,omitempty"`
+
+	// DNS-specific fields. Provider and APIToken are needed only on the write
+	// (admin) side; clients read the zone with a plain DNS lookup using just
+	// Zone and RecordName.
+	Provider   string `toml:"provider,omitempty"`
+	Zone       string `toml:"zone,omitempty"`
+	RecordName string `toml:"record_name,omitempty"`
+	APIToken   string `toml:"api_token,omitempty"`
+	TTL        int    `toml:"ttl,omitempty"`
+	Resolver   string `toml:"resolver,omitempty"`
 }
 
 func (c Config) ReadDrop() DropBackend {

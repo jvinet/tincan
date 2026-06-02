@@ -63,6 +63,7 @@ func TestLoadValidDropTypes(t *testing.T) {
 		{name: "file", backend: DropBackend{Type: "file", Path: filepath.Join(t.TempDir(), "directory.bin")}},
 		{name: "http", backend: DropBackend{Type: "http", URL: "https://example.com/directory.bin", Username: "bob", Password: "secret"}},
 		{name: "s3", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Region: "us-east-1", Bucket: "tincan-net", AccessKey: "access", SecretKey: "secret"}},
+		{name: "dns", backend: DropBackend{Type: "dns", Provider: "linode", Zone: "example.com", APIToken: "tok"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,7 +83,34 @@ func TestLoadValidDropTypes(t *testing.T) {
 			if tc.backend.Type == "s3" && loaded.Drop.Client.ObjectKey != "directory.bin" {
 				t.Fatalf("s3 object key default = %q", loaded.Drop.Client.ObjectKey)
 			}
+			if tc.backend.Type == "dns" {
+				if loaded.Drop.Client.RecordName != "_tincan" {
+					t.Fatalf("dns record_name default = %q", loaded.Drop.Client.RecordName)
+				}
+				if loaded.Drop.Client.TTL != 300 {
+					t.Fatalf("dns ttl default = %d", loaded.Drop.Client.TTL)
+				}
+			}
 		})
+	}
+}
+
+func TestDNSClientOmitsTTL(t *testing.T) {
+	cfg := validConfig(t)
+	cfg.Drop = SkeletonDrop("dns")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Drop.Admin.TTL != 300 {
+		t.Fatalf("admin ttl = %d, want 300", loaded.Drop.Admin.TTL)
+	}
+	if loaded.Drop.Client.TTL != 0 {
+		t.Fatalf("client ttl = %d, want 0 (suppressed on the read side)", loaded.Drop.Client.TTL)
 	}
 }
 
@@ -140,6 +168,11 @@ func TestValidateRejectsBadDropFields(t *testing.T) {
 		{name: "http mixed fields", backend: DropBackend{Type: "http", URL: "https://example.com/directory.bin", Bucket: "bucket"}},
 		{name: "s3 missing bucket", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com"}},
 		{name: "s3 partial credentials", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Bucket: "bucket", AccessKey: "access"}},
+		{name: "dns missing zone", backend: DropBackend{Type: "dns", Provider: "linode", APIToken: "tok"}},
+		{name: "dns unsupported provider", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "route53", APIToken: "tok"}},
+		{name: "dns provider without token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode"}},
+		{name: "dns token without provider", backend: DropBackend{Type: "dns", Zone: "example.com", APIToken: "tok"}},
+		{name: "dns mixed fields", backend: DropBackend{Type: "dns", Zone: "example.com", Bucket: "bucket"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

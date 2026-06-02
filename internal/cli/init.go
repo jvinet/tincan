@@ -17,7 +17,7 @@ import (
 
 type InitCmd struct {
 	Name     string `required:"" help:"Node name."`
-	DropType string `required:"" enum:"s3,http,file" help:"Dead-drop backend type."`
+	DropType string `required:"" enum:"s3,http,file,dns" help:"Dead-drop backend type."`
 	CIDR     string `default:"10.42.0.0/24" help:"Tunnel network CIDR."`
 	Endpoint string `help:"Published endpoint for this node, as host:port."`
 	Cache    string `type:"path" help:"Cache path to write in the generated config."`

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/renameio/v2"
+	"github.com/jvinet/tincan/internal/dnsprovider"
 	"github.com/jvinet/tincan/internal/keys"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -143,6 +144,16 @@ func applyBackendDefaults(b *DropBackend) {
 	if b.Type == "s3" && b.ObjectKey == "" {
 		b.ObjectKey = "directory.bin"
 	}
+	if b.Type == "dns" {
+		if b.RecordName == "" {
+			b.RecordName = "_tincan"
+		}
+		// TTL only governs the records the admin writes, so default it on the
+		// write (provider) side only; read-only client configs stay clean.
+		if b.Provider != "" && b.TTL == 0 {
+			b.TTL = 300
+		}
+	}
 }
 
 func (c Config) Validate(allowIncomplete bool) error {
@@ -267,12 +278,12 @@ func validateDropBackend(b DropBackend) error {
 		if b.Path == "" {
 			return errors.New("path is required for file drops")
 		}
-		return rejectBackendFields("path", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password)
+		return rejectBackendFields("path", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
 	case "http":
 		if b.URL == "" {
 			return errors.New("url is required for http drops")
 		}
-		return rejectBackendFields("url/username/password", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.Path)
+		return rejectBackendFields("url/username/password", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
 	case "s3":
 		if b.Endpoint == "" {
 			return errors.New("endpoint is required for s3 drops")
@@ -283,7 +294,22 @@ func validateDropBackend(b DropBackend) error {
 		if (b.AccessKey == "") != (b.SecretKey == "") {
 			return errors.New("access_key and secret_key must be provided together")
 		}
-		return rejectBackendFields("endpoint/region/bucket/object_key/access_key/secret_key/secure", b.URL, b.Username, b.Password, b.Path)
+		return rejectBackendFields("endpoint/region/bucket/object_key/access_key/secret_key/secure", b.URL, b.Username, b.Password, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
+	case "dns":
+		if b.Zone == "" {
+			return errors.New("zone is required for dns drops")
+		}
+		if b.Provider != "" {
+			if !dnsprovider.Supported(b.Provider) {
+				return fmt.Errorf("unsupported dns provider %q", b.Provider)
+			}
+			if b.APIToken == "" {
+				return fmt.Errorf("api_token is required for dns provider %q", b.Provider)
+			}
+		} else if b.APIToken != "" {
+			return errors.New("api_token is set but no provider is configured")
+		}
+		return rejectBackendFields("provider/zone/record_name/api_token/ttl/resolver", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password, b.Path)
 	default:
 		return fmt.Errorf("unsupported type %q", b.Type)
 	}
@@ -312,6 +338,10 @@ func SkeletonDrop(dropType string) DropConfig {
 	case "file":
 		b := DropBackend{Type: "file", Path: "/mnt/shared/tincan/directory.bin"}
 		return DropConfig{Admin: b, Client: b}
+	case "dns":
+		admin := DropBackend{Type: "dns", Provider: "linode", Zone: "example.com", RecordName: "_tincan", APIToken: "YOUR-LINODE-API-TOKEN", TTL: 300}
+		client := DropBackend{Type: "dns", Zone: "example.com", RecordName: "_tincan"}
+		return DropConfig{Admin: admin, Client: client}
 	default:
 		b := DropBackend{Type: dropType}
 		return DropConfig{Admin: b, Client: b}

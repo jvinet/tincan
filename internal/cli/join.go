@@ -15,7 +15,7 @@ import (
 
 type JoinCmd struct {
 	Bootstrap      string `type:"path" help:"Path to a bootstrap JSON file produced by the admin."`
-	DropType       string `enum:"s3,http,file," default:"" help:"Dead-drop backend type (required without --bootstrap)."`
+	DropType       string `enum:"s3,http,file,dns," default:"" help:"Dead-drop backend type (required without --bootstrap)."`
 	Name           string `help:"Node name (required without a node-level --bootstrap)."`
 	PrivateKeyFile string `type:"path" help:"Read WireGuard private key from this file."`
 	GenerateKey    bool   `help:"Generate a fresh WireGuard keypair locally."`

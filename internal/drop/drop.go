@@ -29,6 +29,8 @@ func New(cfg config.DropBackend) (Drop, error) {
 		return NewHTTP(cfg.URL, cfg.Username, cfg.Password), nil
 	case "s3":
 		return NewS3(cfg)
+	case "dns":
+		return NewDNS(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported drop type %q", cfg.Type)
 	}
