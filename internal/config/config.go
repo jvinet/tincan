@@ -56,8 +56,22 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Save writes a complete configuration: every default is materialized so the
+// file lists all sections and fields applicable to the node.
 func Save(path string, cfg Config) error {
 	cfg.ApplyDefaults()
+	return writeConfig(path, cfg)
+}
+
+// SaveMinimal writes cfg verbatim, without materializing defaults. Fields the
+// caller left unset are dropped by the encoder's omitempty handling, so the
+// file contains only what was explicitly provided — the fields likely or
+// required to be changed. Used by `init`/`join` without --full-config.
+func SaveMinimal(path string, cfg Config) error {
+	return writeConfig(path, cfg)
+}
+
+func writeConfig(path string, cfg Config) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
 		return fmt.Errorf("encode config: %w", err)

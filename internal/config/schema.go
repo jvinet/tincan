@@ -26,7 +26,7 @@ type Config struct {
 	Wireguard WireguardConfig `toml:"wireguard"`
 	Directory DirectoryConfig `toml:"directory"`
 	Drop      DropConfig      `toml:"drop"`
-	Sync      SyncConfig      `toml:"sync"`
+	Sync      SyncConfig      `toml:"sync,omitempty"`
 	Observe   ObserveConfig   `toml:"observe,omitempty"`
 	Discovery DiscoveryConfig `toml:"discovery,omitempty"`
 }
@@ -94,7 +94,7 @@ type SyncConfig struct {
 }
 
 type ObserveConfig struct {
-	Enabled        bool             `toml:"enabled,omitempty"`
+	Enabled        *bool            `toml:"enabled,omitempty"`
 	HandshakeFresh OptionalDuration `toml:"handshake_fresh,omitempty"`
 	// RefreshInterval is deprecated and ignored. The admin no longer
 	// periodically re-stamps ObservedAt: an unchanged observed endpoint is
@@ -102,6 +102,15 @@ type ObserveConfig struct {
 	// The field is retained so existing configs that set it still load (the
 	// decoder rejects unknown keys); new configs omit it.
 	RefreshInterval OptionalDuration `toml:"refresh_interval,omitempty"`
+}
+
+// IsEnabled reports whether the admin should observe peer endpoints. It defaults
+// to on when the [observe] section is absent or omits the field, so a freshly
+// initialized admin learns NAT'd peer endpoints without extra configuration.
+// Only admin nodes consult this (see the call site in `up`); a non-admin that
+// leaves it unset is never asked to observe.
+func (o ObserveConfig) IsEnabled() bool {
+	return o.Enabled == nil || *o.Enabled
 }
 
 // DiscoveryConfig governs LAN peer discovery via multicast beacons.

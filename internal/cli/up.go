@@ -254,9 +254,15 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 		"relayed_peers", relayedNames,
 		"relay_target", relayVia,
 	)
-	if cfg.Observe.Enabled {
+	if cfg.Observe.IsEnabled() {
 		if err := runAdminObservation(ctx, cfg, manager, res.Serial, p); err != nil {
-			return err
+			// Observation defaults on but only applies to admin nodes. When the
+			// operator asked for it explicitly, surface the misconfiguration;
+			// when it is merely the default on a non-admin node, skip quietly.
+			if cfg.Observe.Enabled != nil && *cfg.Observe.Enabled {
+				return err
+			}
+			slog.Debug("skipping endpoint observation (node is not admin)", "error", err)
 		}
 	}
 	return nil

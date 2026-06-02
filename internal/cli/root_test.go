@@ -57,3 +57,97 @@ func TestRunInitBindsCommandContext(t *testing.T) {
 		t.Fatalf("source directory was not written: %v", err)
 	}
 }
+
+func TestInitConfigMinimalVsFull(t *testing.T) {
+	// Sections/fields the minimal config should omit because they default and
+	// are unlikely to be changed; --full-config materializes all of them.
+	// ([sync] itself appears in both since --cache is an explicit override, but
+	// its defaulted interval/pid_file fields should only show up in --full.)
+	defaulted := []string{"interface =", "mtu =", "interval =", "pid_file =", "[observe]", "[discovery]"}
+
+	minimal := initConfig(t, false)
+	for _, want := range defaulted {
+		if strings.Contains(minimal, want) {
+			t.Fatalf("minimal config should omit %q:\n%s", want, minimal)
+		}
+	}
+	// Required/likely-changed fields must always be present.
+	for _, want := range []string{"[wireguard]", "private_key =", "[directory]", "publisher_key =", "[drop.admin]", "[drop.client]"} {
+		if !strings.Contains(minimal, want) {
+			t.Fatalf("minimal config missing required %q:\n%s", want, minimal)
+		}
+	}
+
+	full := initConfig(t, true)
+	for _, want := range defaulted {
+		if !strings.Contains(full, want) {
+			t.Fatalf("full config should include %q:\n%s", want, full)
+		}
+	}
+	// The full config spells out every knob, including the enabled flags at
+	// their admin defaults: both observe and discovery on.
+	if strings.Contains(full, "enabled = false") {
+		t.Fatalf("admin full config should default observe/discovery on, not off:\n%s", full)
+	}
+	if c := strings.Count(full, "enabled = true"); c != 2 {
+		t.Fatalf("full config should surface enabled = true for both [observe] and [discovery], got %d:\n%s", c, full)
+	}
+}
+
+func TestJoinConfigMinimalOmitsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-c", configPath,
+		"join",
+		"--name", "leaf",
+		"--drop-type", "file",
+		"--generate-key",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code=%d, want 0; stderr=%q", code, stderr.String())
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
+	for _, unwanted := range []string{"interface =", "mtu =", "[sync]", "[discovery]"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("minimal client config should omit %q:\n%s", unwanted, out)
+		}
+	}
+	// A client never gets an admin drop section.
+	if strings.Contains(out, "[drop.admin]") {
+		t.Fatalf("client config should not contain [drop.admin]:\n%s", out)
+	}
+	if !strings.Contains(out, "[drop.client]") {
+		t.Fatalf("client config missing [drop.client]:\n%s", out)
+	}
+}
+
+func initConfig(t *testing.T, full bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	args := []string{
+		"-c", configPath,
+		"init",
+		"--name", "cortex",
+		"--drop-type", "s3",
+		"--cache", filepath.Join(dir, "cache.bin"),
+	}
+	if full {
+		args = append(args, "--full-config")
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("init exit code=%d, want 0; stderr=%q", code, stderr.String())
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

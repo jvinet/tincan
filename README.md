@@ -93,6 +93,10 @@ distribute. **Save these somewhere safe** — `init` does not.
 Pass `--force` to overwrite an existing config, or `--cache /path` to write
 the cache somewhere other than the default `/var/lib/tincan/cache.bin`.
 
+By default the generated config is minimal: it lists only the fields you are
+likely or required to change. Pass `--full-config` to instead write every
+section and field that applies to this role, each at its default value.
+
 Now edit `/etc/tincan/config.toml` and fill in `[drop.admin]` (where this node
 writes the directory) and `[drop.client]` (how other nodes read it). For most
 backends these are the same coordinates with different credentials; for HTTP,
@@ -171,7 +175,8 @@ the WireGuard private key on stdin; alternatively:
   so the admin can `add-node --pubkey ...`
 
 Pass `--force` to overwrite an existing config, or `--cache /path` to use a
-non-default cache location.
+non-default cache location. As with `init`, `--full-config` writes every
+applicable section and field at its default instead of the minimal set.
 
 Edit the config and fill in:
 
@@ -282,7 +287,7 @@ By default a NAT'd node can only reach peers whose `Endpoint` is set in the
 directory (typically public hosts). Two NAT'd peers can't reach each other,
 because neither has an address the other can dial.
 
-When `[observe].enabled = true` on an admin node, that admin watches its
+When observation is enabled on an admin node, that admin watches its
 WireGuard interface for inbound handshakes from NAT'd peers, records each
 peer's apparent source `ip:port`, and republishes the directory with those
 observations attached to each node. Other peers pick up the observation on
@@ -290,12 +295,16 @@ their next sync and write it into their local WireGuard config; the standard
 25-second keepalive on NAT'd nodes holds the NAT mapping open long enough for
 the peer-to-peer handshake to complete (UDP hole punching).
 
-To enable:
+Observation is **on by default for admin nodes** — a freshly initialized admin
+needs no extra configuration. To turn it off:
 
 ```toml
 [observe]
-enabled = true
+enabled = false
 ```
+
+The setting only takes effect on an admin node (one with a publisher key and a
+`[drop.admin]`); a client that leaves it unset never observes.
 
 The admin must already be a daemon (`tincan up --daemon` or under systemd) so
 that observation runs each `[sync].interval`. No client-side configuration is
@@ -488,7 +497,7 @@ cache    = "/var/lib/tincan/cache.bin"
 pid_file = "/run/tincan.pid"
 
 [observe]                      # admin-only; see Endpoint discovery
-enabled         = false        # default off; flip to true to discover NAT'd peer endpoints
+enabled         = true         # default on for admins; set false to stop discovering NAT'd peer endpoints
 handshake_fresh = "3m"         # how recent a peer handshake must be to count as observed
 
 [discovery]                    # LAN peer discovery via multicast beacons

@@ -16,12 +16,13 @@ import (
 )
 
 type InitCmd struct {
-	Name     string `required:"" help:"Node name."`
-	DropType string `required:"" enum:"s3,http,file,dns" help:"Dead-drop backend type."`
-	CIDR     string `default:"10.42.0.0/24" help:"Tunnel network CIDR."`
-	Endpoint string `help:"Published endpoint for this node, as host:port."`
-	Cache    string `type:"path" help:"Cache path to write in the generated config."`
-	Force    bool   `help:"Overwrite an existing config."`
+	Name       string `required:"" help:"Node name."`
+	DropType   string `required:"" enum:"s3,http,file,dns" help:"Dead-drop backend type."`
+	CIDR       string `default:"10.42.0.0/24" help:"Tunnel network CIDR."`
+	Endpoint   string `help:"Published endpoint for this node, as host:port."`
+	Cache      string `type:"path" help:"Cache path to write in the generated config."`
+	FullConfig bool   `help:"Write every applicable section and field at its default, not just the fields likely to be changed."`
+	Force      bool   `help:"Overwrite an existing config."`
 }
 
 func (c *InitCmd) Run(_ context.Context, g *Globals) error {
@@ -52,26 +53,37 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	if err != nil {
 		return err
 	}
-	cfg := config.Default()
+	cachePath := config.DefaultCachePath
+	if c.Cache != "" {
+		cachePath = c.Cache
+	}
+	cfg := config.Config{
+		Wireguard: config.WireguardConfig{
+			Name:       c.Name,
+			PublicKey:  wgPub,
+			PrivateKey: wgPriv,
+			ListenPort: listenPort,
+		},
+		Directory: config.DirectoryConfig{
+			NetworkIdentity: networkIdentity,
+			PublisherPubKey: publisherPub,
+			PublisherKey:    publisherPriv,
+		},
+		Drop: config.SkeletonDrop(c.DropType),
+	}
 	if c.Cache != "" {
 		cfg.Sync.Cache = c.Cache
 	}
-	cfg.Wireguard = config.WireguardConfig{
-		Name:       c.Name,
-		PublicKey:  wgPub,
-		PrivateKey: wgPriv,
-		Interface:  config.DefaultInterface,
-		ListenPort: listenPort,
-		MTU:        config.DefaultMTU,
-	}
-	cfg.Directory = config.DirectoryConfig{
-		NetworkIdentity: networkIdentity,
-		PublisherPubKey: publisherPub,
-		PublisherKey:    publisherPriv,
-	}
-	cfg.Drop = config.SkeletonDrop(c.DropType)
-	cfg.Observe = config.ObserveConfig{
-		HandshakeFresh: config.NewDuration(admin.DefaultHandshakeFresh),
+	if c.FullConfig {
+		// [observe] is admin-only and ApplyDefaults does not fill it, so set it
+		// explicitly when writing a complete config. Both enabled flags default
+		// on for an admin node; spell them out at their defaults so the full
+		// config surfaces every knob.
+		cfg.Observe = config.ObserveConfig{
+			Enabled:        boolPtr(true),
+			HandshakeFresh: config.NewDuration(admin.DefaultHandshakeFresh),
+		}
+		cfg.Discovery.Enabled = boolPtr(true)
 	}
 	dir := directory.Directory{
 		SchemaVersion: directory.SchemaVersion,
@@ -85,13 +97,13 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 			Endpoint:  c.Endpoint,
 		}},
 	}
-	if err := cache.WriteSource(cfg.Sync.Cache, dir); err != nil {
+	if err := cache.WriteSource(cachePath, dir); err != nil {
 		return err
 	}
-	if err := config.Save(g.Config, cfg); err != nil {
+	if err := saveConfig(g.Config, cfg, c.FullConfig); err != nil {
 		return err
 	}
-	netbootPath := bootstrap.DefaultPath(cfg.Sync.Cache)
+	netbootPath := bootstrap.DefaultPath(cachePath)
 	if err := bootstrap.Write(netbootPath, bootstrap.Network(&cfg)); err != nil {
 		return err
 	}
@@ -102,7 +114,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	p.section("Paths")
 	p.pairs(
 		kv("config", g.Config),
-		kv("working directory", config.SourcePath(cfg.Sync.Cache)),
+		kv("working directory", config.SourcePath(cachePath)),
 		kv("network bootstrap", netbootPath),
 	)
 	p.blank()
@@ -128,6 +140,6 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	)
 	p.blank()
 	p.hint("Next steps: edit the [drop.admin] and [drop.client] sections, then run `tincan publish`")
-	p.hint("To let NAT'd peers discover each other's endpoints, set [observe].enabled = true on this admin node")
+	p.hint("This admin observes NAT'd peer endpoints by default; set [observe].enabled = false to turn it off")
 	return nil
 }

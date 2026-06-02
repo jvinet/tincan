@@ -20,6 +20,7 @@ type JoinCmd struct {
 	PrivateKeyFile string `type:"path" help:"Read WireGuard private key from this file."`
 	GenerateKey    bool   `help:"Generate a fresh WireGuard keypair locally."`
 	Cache          string `type:"path" help:"Cache path to write in the generated config."`
+	FullConfig     bool   `help:"Write every applicable section and field at its default, not just the fields likely to be changed."`
 	Force          bool   `help:"Overwrite an existing config."`
 }
 
@@ -66,23 +67,27 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 		return err
 	}
 
-	cfg := config.Default()
+	cfg := config.Config{
+		Wireguard: config.WireguardConfig{
+			Name:       nodeName,
+			PublicKey:  publicKey,
+			PrivateKey: privateKey,
+		},
+		Directory: config.DirectoryConfig{
+			NetworkIdentity: networkIdentity,
+			PublisherPubKey: publisherPubKey,
+		},
+		Drop: dropConfig,
+	}
 	if c.Cache != "" {
 		cfg.Sync.Cache = c.Cache
 	}
-	cfg.Wireguard = config.WireguardConfig{
-		Name:       nodeName,
-		PublicKey:  publicKey,
-		PrivateKey: privateKey,
-		Interface:  config.DefaultInterface,
-		MTU:        config.DefaultMTU,
+	if c.FullConfig {
+		// Discovery applies to every role and defaults on; spell it out so the
+		// full config surfaces the knob.
+		cfg.Discovery.Enabled = boolPtr(true)
 	}
-	cfg.Directory = config.DirectoryConfig{
-		NetworkIdentity: networkIdentity,
-		PublisherPubKey: publisherPubKey,
-	}
-	cfg.Drop = dropConfig
-	if err := config.Save(g.Config, cfg); err != nil {
+	if err := saveConfig(g.Config, cfg, c.FullConfig); err != nil {
 		return err
 	}
 	slog.Info("initialized client node", "name", nodeName, "config", g.Config, "from_bootstrap", bs != nil)

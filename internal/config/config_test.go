@@ -114,6 +114,30 @@ func TestDNSClientOmitsTTL(t *testing.T) {
 	}
 }
 
+func TestObserveEnabledRoundTrip(t *testing.T) {
+	if !(ObserveConfig{}).IsEnabled() {
+		t.Fatal("observe should default to enabled when unset")
+	}
+	disabled := false
+	if (ObserveConfig{Enabled: &disabled}).IsEnabled() {
+		t.Fatal("observe should report disabled when set false")
+	}
+
+	cfg := validConfig(t)
+	cfg.Observe.Enabled = &disabled
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Observe.IsEnabled() {
+		t.Fatalf("observe disabled did not round-trip: %+v", loaded.Observe)
+	}
+}
+
 func TestRejectMismatchedWGKeys(t *testing.T) {
 	cfg := validConfig(t)
 	_, cfg.Wireguard.PublicKey, _ = keys.GenerateWGKeypair()

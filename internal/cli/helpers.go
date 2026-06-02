@@ -135,6 +135,18 @@ func configExists(path string) (bool, error) {
 	return false, err
 }
 
+func boolPtr(b bool) *bool { return &b }
+
+// saveConfig writes the generated config either in full (every applicable
+// section and field at its default) or minimal (only the fields explicitly
+// set, which are the ones likely or required to be changed).
+func saveConfig(path string, cfg config.Config, full bool) error {
+	if full {
+		return config.Save(path, cfg)
+	}
+	return config.SaveMinimal(path, cfg)
+}
+
 func listenPortFromEndpoint(endpoint string) (int, error) {
 	if endpoint == "" {
 		return 0, nil
