@@ -21,14 +21,6 @@ type Drop interface {
 	Name() string
 }
 
-// PublicReader is implemented by drops that can grant anonymous read access to
-// the published object. The admin publish path calls EnsurePublicRead when the
-// backend is configured with public_read = true. It is kept separate from Drop
-// because only some backends support it (currently s3, via a bucket policy).
-type PublicReader interface {
-	EnsurePublicRead(ctx context.Context) error
-}
-
 func New(cfg config.DropBackend) (Drop, error) {
 	switch cfg.Type {
 	case "file":

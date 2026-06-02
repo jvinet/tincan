@@ -420,8 +420,6 @@ object_key = "directory.bin"    # defaults to "directory.bin"
 access_key = "..."              # admin's read+write key
 secret_key = "..."
 # tls = false                   # set to false for HTTP-only endpoints (e.g. local MinIO)
-# public_read = true            # on publish, set a bucket policy granting anonymous
-                                # read of the object, so clients need no credentials
 
 [drop.client]
 type = "s3"
@@ -431,6 +429,10 @@ bucket = "my-tincan-net"
 object_key = "directory.bin"
 # access_key / secret_key — omit for anonymous read, or provision read-only keys
 ```
+
+> Anonymous client reads work only if the object is already public. tincan does
+> not manage bucket permissions — make the object public with your provider's own
+> tooling (bucket policy / console), or give `[drop.client]` a read-only key.
 
 ### HTTP (read-only for clients)
 

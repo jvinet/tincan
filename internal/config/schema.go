@@ -61,9 +61,6 @@ type DropBackend struct {
 	AccessKey string `toml:"access_key,omitempty"`
 	SecretKey string `toml:"secret_key,omitempty"`
 	TLS       *bool  `toml:"tls,omitempty"`
-	// PublicRead (s3, admin side) makes `publish` set a bucket policy granting
-	// anonymous read of the published object, so clients need no credentials.
-	PublicRead bool `toml:"public_read,omitempty"`
 
 	URL      string `toml:"url,omitempty"`
 	Username string `toml:"username,omitempty"`

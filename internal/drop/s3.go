@@ -3,7 +3,6 @@ package drop
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 
@@ -58,46 +57,6 @@ func (s *S3) Stat(ctx context.Context) (Metadata, error) {
 		return Metadata{}, mapS3Err(err)
 	}
 	return Metadata{Size: info.Size, UpdatedAt: info.LastModified, ETag: info.ETag}, nil
-}
-
-// EnsurePublicRead sets a bucket policy granting anonymous s3:GetObject on the
-// published object only. It is idempotent: each publish re-applies the same
-// policy, so the object stays readable even though every PutObject overwrites
-// it with the bucket's default (private) ACL — which is why a per-object ACL
-// set out-of-band reverts but this does not. Setting the policy replaces any
-// existing bucket policy, so use a bucket dedicated to tincan.
-func (s *S3) EnsurePublicRead(ctx context.Context) error {
-	policy, err := publicReadPolicy(s.bucket, s.object)
-	if err != nil {
-		return err
-	}
-	if err := s.client.SetBucketPolicy(ctx, s.bucket, policy); err != nil {
-		if minio.ToErrorResponse(err).StatusCode == 403 {
-			return fmt.Errorf("set bucket policy on %q: access denied — the admin key needs s3:PutBucketPolicy: %w", s.bucket, err)
-		}
-		return fmt.Errorf("set bucket policy on %q: %w", s.bucket, err)
-	}
-	return nil
-}
-
-// publicReadPolicy builds an S3 bucket policy granting anonymous read of a
-// single object (bucket/object), scoped as tightly as possible.
-func publicReadPolicy(bucket, object string) (string, error) {
-	policy := map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []map[string]any{{
-			"Sid":       "TincanPublicRead",
-			"Effect":    "Allow",
-			"Principal": map[string]any{"AWS": []string{"*"}},
-			"Action":    []string{"s3:GetObject"},
-			"Resource":  []string{fmt.Sprintf("arn:aws:s3:::%s/%s", bucket, object)},
-		}},
-	}
-	buf, err := json.Marshal(policy)
-	if err != nil {
-		return "", err
-	}
-	return string(buf), nil
 }
 
 func mapS3Err(err error) error {

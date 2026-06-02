@@ -75,15 +75,6 @@ func publishDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir 
 	if err := d.Put(ctx, blob); err != nil {
 		return err
 	}
-	if cfg.Drop.Admin.PublicRead {
-		pr, ok := d.(drop.PublicReader)
-		if !ok {
-			return fmt.Errorf("public_read is set but drop type %q does not support it", cfg.Drop.Admin.Type)
-		}
-		if err := pr.EnsurePublicRead(ctx); err != nil {
-			return fmt.Errorf("ensure public read: %w", err)
-		}
-	}
 	if err := cache.Write(cfg.Sync.StateDir, dir, ""); err != nil {
 		return err
 	}

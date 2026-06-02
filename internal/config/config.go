@@ -310,9 +310,6 @@ func RequireAdmin(c Config) error {
 }
 
 func validateDropBackend(b DropBackend) error {
-	if b.PublicRead && b.Type != "s3" {
-		return errors.New("public_read is only valid for s3 drops")
-	}
 	switch b.Type {
 	case "file":
 		if b.Path == "" {
@@ -334,10 +331,7 @@ func validateDropBackend(b DropBackend) error {
 		if (b.AccessKey == "") != (b.SecretKey == "") {
 			return errors.New("access_key and secret_key must be provided together")
 		}
-		if b.PublicRead && b.AccessKey == "" {
-			return errors.New("public_read requires access_key and secret_key (it sets a bucket policy)")
-		}
-		return rejectBackendFields("endpoint/region/bucket/object_key/access_key/secret_key/tls/public_read", b.URL, b.Username, b.Password, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
+		return rejectBackendFields("endpoint/region/bucket/object_key/access_key/secret_key/tls", b.URL, b.Username, b.Password, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
 	case "dns":
 		if b.Zone == "" {
 			return errors.New("zone is required for dns drops")
