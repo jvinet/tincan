@@ -67,8 +67,21 @@ func mapS3Err(err error) error {
 	switch resp.StatusCode {
 	case 0:
 		return err
-	case 401, 403:
+	case 401:
 		return ErrAuth
+	case 403:
+		// A 403 has two very different causes. Bad or expired credentials come
+		// back with a signature/key error code and are a genuine auth failure.
+		// Everything else — most importantly AccessDenied, which minio-go also
+		// synthesizes for bodyless HEAD responses — means the request reached
+		// the bucket fine but the object simply isn't readable, e.g. a private
+		// object or a missing public-read bucket policy.
+		switch resp.Code {
+		case "SignatureDoesNotMatch", "InvalidAccessKeyId", "InvalidSecurity", "ExpiredToken", "TokenRefreshRequired":
+			return ErrAuth
+		default:
+			return fmt.Errorf("%w: object not readable — check the bucket policy or object ACL", ErrForbidden)
+		}
 	case 404:
 		return ErrNotFound
 	default:

@@ -23,19 +23,36 @@ func (c *SyncCmd) Run(ctx context.Context, g *Globals) error {
 	if err != nil {
 		return err
 	}
-	p := newPrinter(os.Stdout)
-	source := "drop"
-	if res.FromCache {
-		source = "local cache"
-	}
-	p.headline("synced from %s (serial: %d)", source, res.Serial)
+	newPrinter(os.Stdout).reportSync(res)
 	return nil
 }
 
 type syncResult struct {
 	Serial    uint64
 	FromCache bool
+	// StaleErr is the drop error that forced a fall back to the local cache. It
+	// is non-nil exactly when FromCache is true, so callers can report why they
+	// are serving a cached (and possibly stale) directory instead of failing.
+	StaleErr  error
 	Directory directory.Directory
+}
+
+// syncSource describes where a syncResult's directory came from.
+func syncSource(res syncResult) string {
+	if res.FromCache {
+		return "local cache"
+	}
+	return "drop"
+}
+
+// reportSync prints the sync outcome and, when the drop was unreachable and a
+// stale cached directory is being served instead, warns with the underlying
+// drop error. sync previously swallowed that error behind a success message.
+func (p *printer) reportSync(res syncResult) {
+	p.headline("synced from %s (serial: %d)", syncSource(res), res.Serial)
+	if res.FromCache && res.StaleErr != nil {
+		p.warn("drop unreachable (%v); serving cached serial %d", res.StaleErr, res.Serial)
+	}
 }
 
 func runSyncOnce(ctx context.Context, cfg *config.Config, timeout time.Duration) (syncResult, error) {
@@ -43,33 +60,41 @@ func runSyncOnce(ctx context.Context, cfg *config.Config, timeout time.Duration)
 	if err != nil {
 		return syncResult{}, err
 	}
-	dir, fromCache, err := fetchSyncDirectory(ctx, cfg, d, timeout)
+	dir, fromCache, dropErr, err := fetchSyncDirectory(ctx, cfg, d, timeout)
 	if err != nil {
 		return syncResult{}, err
 	}
 	if err := cache.Write(cfg.Sync.StateDir, dir, ""); err != nil {
 		return syncResult{}, err
 	}
-	return syncResult{Serial: dir.Serial, FromCache: fromCache, Directory: dir}, nil
+	return syncResult{Serial: dir.Serial, FromCache: fromCache, StaleErr: dropErr, Directory: dir}, nil
 }
 
-func fetchSyncDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, timeout time.Duration) (directory.Directory, bool, error) {
+// fetchSyncDirectory loads the directory from the drop, falling back to the
+// local cache when the drop is unreachable.
+//
+// It returns the directory; whether it came from the cache; the non-fatal
+// dropErr that triggered the fallback (non-nil exactly when fromCache is true);
+// and a fatal err. A fatal err means neither the drop nor the cache could
+// satisfy the request, or the fetched directory was invalid. Callers should
+// surface dropErr but may continue serving the cached directory.
+func fetchSyncDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, timeout time.Duration) (directory.Directory, bool, error, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	blob, err := d.Get(fetchCtx)
-	if err != nil {
+	blob, dropErr := d.Get(fetchCtx)
+	if dropErr != nil {
 		dir, _, cacheErr := cache.Read(cfg.Sync.StateDir)
 		if cacheErr != nil {
-			return directory.Directory{}, false, fmt.Errorf("drop fetch failed (%v) and cache unavailable (%v)", err, cacheErr)
+			return directory.Directory{}, false, dropErr, fmt.Errorf("drop fetch failed (%v) and cache unavailable (%v)", dropErr, cacheErr)
 		}
-		return dir, true, nil
+		return dir, true, dropErr, nil
 	}
 	dir, _, err := directory.Open(blob, cfg.Directory.NetworkIdentity, cfg.Directory.PublisherPubKey)
 	if err != nil {
-		return directory.Directory{}, false, err
+		return directory.Directory{}, false, nil, err
 	}
 	if cachedSerial, err := cache.ReadSerial(cfg.Sync.StateDir); err == nil && directory.IsRollback(dir.Serial, cachedSerial) {
-		return directory.Directory{}, false, fmt.Errorf("stale serial %d is older than cached serial %d", dir.Serial, cachedSerial)
+		return directory.Directory{}, false, nil, fmt.Errorf("stale serial %d is older than cached serial %d", dir.Serial, cachedSerial)
 	}
-	return dir, false, nil
+	return dir, false, nil, nil
 }

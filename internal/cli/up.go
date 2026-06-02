@@ -74,12 +74,11 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 			slog.Error("sync failed during up", "error", err)
 			return err
 		}
-		source := "drop"
-		if res.FromCache {
-			source = "local cache"
+		slog.Info("synced", "source", syncSource(res), "serial", res.Serial)
+		if res.FromCache && res.StaleErr != nil {
+			slog.Warn("drop unreachable during up, serving stale cache", "error", res.StaleErr, "serial", res.Serial)
 		}
-		slog.Info("synced", "source", source, "serial", res.Serial)
-		p.headline("synced from %s (serial: %d)", source, res.Serial)
+		p.reportSync(res)
 		dir = res.Directory
 	}
 	self, err := findSelf(cfg, dir)
@@ -193,12 +192,11 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if err != nil {
 		return err
 	}
-	source := "drop"
-	if res.FromCache {
-		source = "local cache"
+	slog.Info("synced", "source", syncSource(res), "serial", res.Serial)
+	if res.FromCache && res.StaleErr != nil {
+		slog.Warn("drop unreachable, serving stale cache", "error", res.StaleErr, "serial", res.Serial)
 	}
-	slog.Info("synced", "source", source, "serial", res.Serial)
-	p.headline("synced from %s (serial: %d)", source, res.Serial)
+	p.reportSync(res)
 	if dirHolder != nil {
 		dirCopy := res.Directory
 		dirHolder.Store(&dirCopy)

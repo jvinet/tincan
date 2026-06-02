@@ -47,12 +47,15 @@ func TestFetchSyncDirectoryUsesCacheOnDropFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	fd := &fakedrop.Drop{GetErr: errors.New("offline")}
-	got, fromCache, err := fetchSyncDirectory(context.Background(), cfg, fd, time.Second)
+	got, fromCache, dropErr, err := fetchSyncDirectory(context.Background(), cfg, fd, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !fromCache {
 		t.Fatal("expected cache fallback")
+	}
+	if dropErr == nil || !strings.Contains(dropErr.Error(), "offline") {
+		t.Fatalf("expected drop error to be surfaced, got %v", dropErr)
 	}
 	if got.Serial != dir.Serial {
 		t.Fatalf("serial=%d, want %d", got.Serial, dir.Serial)
@@ -71,7 +74,7 @@ func TestFetchSyncDirectoryRejectsRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	fd := &fakedrop.Drop{Data: blob}
-	_, _, err = fetchSyncDirectory(context.Background(), cfg, fd, time.Second)
+	_, _, _, err = fetchSyncDirectory(context.Background(), cfg, fd, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "stale serial") {
 		t.Fatalf("expected stale serial error, got %v", err)
 	}
