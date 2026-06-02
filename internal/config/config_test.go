@@ -50,8 +50,8 @@ func TestSaveLoadStrictConfig(t *testing.T) {
 	if err := os.WriteFile(badPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(badPath); err == nil || !strings.Contains(err.Error(), "strict mode") {
-		t.Fatalf("expected unknown field error, got %v", err)
+	if _, err := Load(badPath); err == nil || !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), `unknown" at line`) {
+		t.Fatalf("expected named unknown-field error, got %v", err)
 	}
 }
 
@@ -200,6 +200,29 @@ func TestS3PublicReadAndTLSRoundTrip(t *testing.T) {
 	}
 	if loaded.Drop.Admin.S3UseTLS() || loaded.Drop.Client.S3UseTLS() {
 		t.Fatal("tls=false did not round-trip (S3UseTLS should report false)")
+	}
+}
+
+// TestLoadNamesUnknownField is the regression for the operator-facing message:
+// a renamed/typo'd field must be reported by its dotted key and line, not the
+// opaque "strict mode: fields ... missing in the target struct". The doc need
+// only parse — Load returns at the decode step, before validation runs.
+func TestLoadNamesUnknownField(t *testing.T) {
+	doc := "[wireguard]\nname = \"alice\"\n\n[drop.admin]\ntype = \"s3\"\nsecure = false\n"
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected unknown-field error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"drop.admin.secure"`) {
+		t.Fatalf("error should name the dotted key, got: %v", msg)
+	}
+	if !strings.Contains(msg, "line 6") {
+		t.Fatalf("error should cite the line, got: %v", msg)
 	}
 }
 

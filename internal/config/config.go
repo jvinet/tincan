@@ -47,13 +47,36 @@ func Load(path string) (*Config, error) {
 	dec := toml.NewDecoder(f)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("decode config: %w", err)
+		return nil, fmt.Errorf("decode config: %w", explainDecodeError(err))
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(false); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// explainDecodeError rewrites go-toml's strict-mode error — whose own message
+// is the unhelpful "fields in the document are missing in the target struct" —
+// into one that names each offending key and the line it sits on, so an
+// operator can jump straight to it (e.g. after a config field is renamed). The
+// structured error already carries the full dotted key path and position; we
+// just surface them. Any other decode error passes through unchanged.
+func explainDecodeError(err error) error {
+	var strict *toml.StrictMissingError
+	if !errors.As(err, &strict) || len(strict.Errors) == 0 {
+		return err
+	}
+	items := make([]string, len(strict.Errors))
+	for i := range strict.Errors {
+		e := strict.Errors[i]
+		line, _ := e.Position()
+		items[i] = fmt.Sprintf("%q at line %d", strings.Join(e.Key(), "."), line)
+	}
+	if len(items) == 1 {
+		return fmt.Errorf("unknown field %s", items[0])
+	}
+	return fmt.Errorf("unknown fields: %s", strings.Join(items, "; "))
 }
 
 // Save writes a complete configuration: every default is materialized so the
