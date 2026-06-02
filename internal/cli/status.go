@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jvinet/tincan/internal/cache"
+	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/daemon"
 	"github.com/jvinet/tincan/internal/directory"
 	"golang.zx2c4.com/wireguard/wgctrl"
@@ -62,9 +63,9 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		WireGuard: map[string]interface{}{},
 	}
 	nodesByPubkey := map[string]directory.Node{}
-	if dir, _, err := cache.Read(cfg.Sync.Cache); err == nil {
+	if dir, _, err := cache.Read(cfg.Sync.StateDir); err == nil {
 		out.Cache["serial"] = dir.Serial
-		out.Cache["path"] = cfg.Sync.Cache
+		out.Cache["path"] = config.CachePath(cfg.Sync.StateDir)
 		for _, node := range dir.Nodes {
 			nodesByPubkey[node.PublicKey] = node
 		}
@@ -89,12 +90,12 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 	} else {
 		out.Cache["error"] = err.Error()
 	}
-	if state, err := cache.ReadState(cfg.Sync.Cache); err == nil {
+	if state, err := cache.ReadState(cfg.Sync.StateDir); err == nil {
 		out.Cache["last_sync"] = state.LastSync
 		out.Cache["age"] = time.Since(state.LastSync).Truncate(time.Second).String()
 		out.Cache["etag"] = state.LastETag
 	}
-	if dState, err := cache.ReadDiscovery(cfg.Sync.Cache); err == nil {
+	if dState, err := cache.ReadDiscovery(cfg.Sync.StateDir); err == nil {
 		out.Discovery = discoveryStatusFields(dState, nodesByPubkey)
 	}
 	if pid, err := daemon.ReadPID(cfg.Sync.PIDFile); err == nil {
@@ -121,7 +122,7 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		out.Drop["reachable"] = false
 		out.Drop["error"] = err.Error()
 	}
-	dir, _, _ := cache.Read(cfg.Sync.Cache)
+	dir, _, _ := cache.Read(cfg.Sync.StateDir)
 	self, _ := findSelf(cfg, dir)
 	if client, err := wgctrl.New(); err == nil {
 		dev, devErr := client.Device(cfg.Wireguard.Interface)

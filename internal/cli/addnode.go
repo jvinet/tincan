@@ -63,7 +63,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	}
 	dir.Nodes = append(dir.Nodes, directory.Node{Name: c.Name, PublicKey: publicKey, TunnelIP: tunnelIP, Endpoint: c.Endpoint})
 	if c.NoPublish {
-		if err := cache.WriteSource(cfg.Sync.Cache, dir); err != nil {
+		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
 			return err
 		}
 	} else {

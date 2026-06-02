@@ -66,13 +66,13 @@ func TestTwoNamespaceFileDropMVP(t *testing.T) {
 
 	dropPath := filepath.Join(tmp, "drop", "directory.bin")
 	adminCfgPath := filepath.Join(tmp, "admin.toml")
-	adminCache := filepath.Join(tmp, "admin-state", "cache.bin")
-	runNS(t, ctx, nsA, bin, "--config", adminCfgPath, "init", "--name", "alice", "--drop-type", "file", "--cidr", "10.42.0.0/24", "--endpoint", "192.0.2.1:51820", "--cache", adminCache)
+	adminState := filepath.Join(tmp, "admin-state")
+	runNS(t, ctx, nsA, bin, "--config", adminCfgPath, "init", "--name", "alice", "--drop-type", "file", "--cidr", "10.42.0.0/24", "--endpoint", "192.0.2.1:51820", "--state-dir", adminState)
 	adminCfg, err := config.Load(adminCfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminCfg.Drop = config.DropConfig{Type: "file", Path: dropPath}
+	adminCfg.Drop = config.DropConfig{Admin: config.DropBackend{Type: "file", Path: dropPath}, Client: config.DropBackend{Type: "file", Path: dropPath}}
 	if err := config.Save(adminCfgPath, *adminCfg); err != nil {
 		t.Fatal(err)
 	}
@@ -86,12 +86,12 @@ func TestTwoNamespaceFileDropMVP(t *testing.T) {
 	}
 
 	bobCfgPath := filepath.Join(tmp, "bob.toml")
-	bobCache := filepath.Join(tmp, "bob-state", "cache.bin")
-	runNS(t, ctx, nsB, bin, "--config", bobCfgPath, "join", "--drop-type", "file", "--name", "bob", "--private-key-file", bobKeyPath, "--cache", bobCache)
+	bobState := filepath.Join(tmp, "bob-state")
+	runNS(t, ctx, nsB, bin, "--config", bobCfgPath, "join", "--drop-type", "file", "--name", "bob", "--private-key-file", bobKeyPath, "--state-dir", bobState)
 	bobCfg := readLooseConfig(t, bobCfgPath)
 	bobCfg.Directory.NetworkIdentity = adminCfg.Directory.NetworkIdentity
 	bobCfg.Directory.PublisherPubKey = adminCfg.Directory.PublisherPubKey
-	bobCfg.Drop = config.DropConfig{Type: "file", Path: dropPath}
+	bobCfg.Drop = config.DropConfig{Admin: config.DropBackend{Type: "file", Path: dropPath}, Client: config.DropBackend{Type: "file", Path: dropPath}}
 	if err := config.Save(bobCfgPath, bobCfg); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,3 @@
     "first non-self node with an Endpoint".
 - Add utility command to view the raw, pretty-printed directory source
   - Loosely equivalent to `cat /var/lib/tincan/directory-source.bin | msgpack2json | jq`
-- Admin seems to publish more often than is necessary
-  - Just updated `oat` timestamps with no other changes?
-- Replace `--cache` with `--state-dir`

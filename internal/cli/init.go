@@ -20,7 +20,7 @@ type InitCmd struct {
 	DropType   string `required:"" enum:"s3,http,file,dns" help:"Dead-drop backend type."`
 	CIDR       string `default:"10.42.0.0/24" help:"Tunnel network CIDR."`
 	Endpoint   string `help:"Published endpoint for this node, as host:port."`
-	Cache      string `type:"path" help:"Cache path to write in the generated config."`
+	StateDir   string `type:"path" help:"Directory for the cache and sibling state files (default /var/lib/tincan)."`
 	FullConfig bool   `help:"Write every applicable section and field at its default, not just the fields likely to be changed."`
 	Force      bool   `help:"Overwrite an existing config."`
 }
@@ -53,9 +53,9 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	if err != nil {
 		return err
 	}
-	cachePath := config.DefaultCachePath
-	if c.Cache != "" {
-		cachePath = c.Cache
+	stateDir := config.DefaultStateDir
+	if c.StateDir != "" {
+		stateDir = c.StateDir
 	}
 	cfg := config.Config{
 		Wireguard: config.WireguardConfig{
@@ -71,8 +71,8 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 		},
 		Drop: config.SkeletonDrop(c.DropType),
 	}
-	if c.Cache != "" {
-		cfg.Sync.Cache = c.Cache
+	if stateDir != config.DefaultStateDir {
+		cfg.Sync.StateDir = stateDir
 	}
 	if c.FullConfig {
 		// [observe] is admin-only and ApplyDefaults does not fill it, so set it
@@ -97,13 +97,13 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 			Endpoint:  c.Endpoint,
 		}},
 	}
-	if err := cache.WriteSource(cachePath, dir); err != nil {
+	if err := cache.WriteSource(stateDir, dir); err != nil {
 		return err
 	}
 	if err := saveConfig(g.Config, cfg, c.FullConfig); err != nil {
 		return err
 	}
-	netbootPath := bootstrap.DefaultPath(cachePath)
+	netbootPath := bootstrap.DefaultPath(stateDir)
 	if err := bootstrap.Write(netbootPath, bootstrap.Network(&cfg)); err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	p.section("Paths")
 	p.pairs(
 		kv("config", g.Config),
-		kv("working directory", config.SourcePath(cachePath)),
+		kv("state directory", stateDir),
 		kv("network bootstrap", netbootPath),
 	)
 	p.blank()

@@ -90,8 +90,9 @@ sudo tincan init \
 It prints all the generated keys to stdout, including the secrets you need to
 distribute. **Save these somewhere safe** — `init` does not.
 
-Pass `--force` to overwrite an existing config, or `--cache /path` to write
-the cache somewhere other than the default `/var/lib/tincan/cache.bin`.
+Pass `--force` to overwrite an existing config, or `--state-dir /path` to put
+the cache and its sibling state files somewhere other than the default
+`/var/lib/tincan`.
 
 By default the generated config is minimal: it lists only the fields you are
 likely or required to change. Pass `--full-config` to instead write every
@@ -174,8 +175,8 @@ the WireGuard private key on stdin; alternatively:
 - `--generate-key` — generate a fresh keypair locally and print the public key
   so the admin can `add-node --pubkey ...`
 
-Pass `--force` to overwrite an existing config, or `--cache /path` to use a
-non-default cache location. As with `init`, `--full-config` writes every
+Pass `--force` to overwrite an existing config, or `--state-dir /path` to use a
+non-default state directory. As with `init`, `--full-config` writes every
 applicable section and field at its default instead of the minimal set.
 
 Edit the config and fill in:
@@ -492,9 +493,9 @@ type = "s3"
 # ...backend-specific fields...
 
 [sync]
-interval = "5m"                # daemon poll interval
-cache    = "/var/lib/tincan/cache.bin"
-pid_file = "/run/tincan.pid"
+interval  = "5m"                # daemon poll interval
+state_dir = "/var/lib/tincan"   # houses cache.bin and its sibling state files
+pid_file  = "/run/tincan.pid"
 
 [observe]                      # admin-only; see Endpoint discovery
 enabled         = true         # default on for admins; set false to stop discovering NAT'd peer endpoints

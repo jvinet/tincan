@@ -32,7 +32,7 @@ func TestPublishDirectoryWithFakeDrop(t *testing.T) {
 	if opened.Serial != dir.Serial {
 		t.Fatalf("published serial=%d, want %d", opened.Serial, dir.Serial)
 	}
-	source, err := cache.ReadSource(cfg.Sync.Cache)
+	source, err := cache.ReadSource(cfg.Sync.StateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestPublishDirectoryWithFakeDrop(t *testing.T) {
 
 func TestFetchSyncDirectoryUsesCacheOnDropFailure(t *testing.T) {
 	cfg, dir := testFlowConfigAndDirectory(t, 2)
-	if err := cache.Write(cfg.Sync.Cache, dir, ""); err != nil {
+	if err := cache.Write(cfg.Sync.StateDir, dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	fd := &fakedrop.Drop{GetErr: errors.New("offline")}
@@ -61,7 +61,7 @@ func TestFetchSyncDirectoryUsesCacheOnDropFailure(t *testing.T) {
 
 func TestFetchSyncDirectoryRejectsRollback(t *testing.T) {
 	cfg, cached := testFlowConfigAndDirectory(t, 5)
-	if err := cache.Write(cfg.Sync.Cache, cached, ""); err != nil {
+	if err := cache.Write(cfg.Sync.StateDir, cached, ""); err != nil {
 		t.Fatal(err)
 	}
 	stale := cached
@@ -100,7 +100,7 @@ func testFlowConfigAndDirectory(t *testing.T, serial uint64) (*config.Config, di
 	cfg.Directory.PublisherKey = publisherPriv
 	backend := config.DropBackend{Type: "file", Path: filepath.Join(t.TempDir(), "drop.bin")}
 	cfg.Drop = config.DropConfig{Admin: backend, Client: backend}
-	cfg.Sync.Cache = filepath.Join(t.TempDir(), "cache.bin")
+	cfg.Sync.StateDir = t.TempDir()
 	dir := directory.Directory{
 		SchemaVersion: directory.SchemaVersion,
 		Serial:        serial,

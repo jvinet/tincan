@@ -19,7 +19,7 @@ type JoinCmd struct {
 	Name           string `help:"Node name (required without a node-level --bootstrap)."`
 	PrivateKeyFile string `type:"path" help:"Read WireGuard private key from this file."`
 	GenerateKey    bool   `help:"Generate a fresh WireGuard keypair locally."`
-	Cache          string `type:"path" help:"Cache path to write in the generated config."`
+	StateDir       string `type:"path" help:"Directory for the cache and sibling state files (default /var/lib/tincan)."`
 	FullConfig     bool   `help:"Write every applicable section and field at its default, not just the fields likely to be changed."`
 	Force          bool   `help:"Overwrite an existing config."`
 }
@@ -79,8 +79,8 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 		},
 		Drop: dropConfig,
 	}
-	if c.Cache != "" {
-		cfg.Sync.Cache = c.Cache
+	if c.StateDir != "" && c.StateDir != config.DefaultStateDir {
+		cfg.Sync.StateDir = c.StateDir
 	}
 	if c.FullConfig {
 		// Discovery applies to every role and defaults on; spell it out so the

@@ -25,7 +25,7 @@ func Default() Config {
 		Drop: DropConfig{},
 		Sync: SyncConfig{
 			Interval: NewDuration(DefaultInterval),
-			Cache:    DefaultCachePath,
+			StateDir: DefaultStateDir,
 			PIDFile:  DefaultPIDFile,
 		},
 		Discovery: DiscoveryConfig{
@@ -134,8 +134,8 @@ func (c *Config) ApplyDefaults() {
 	if !c.Sync.Interval.Set {
 		c.Sync.Interval = NewDuration(DefaultInterval)
 	}
-	if c.Sync.Cache == "" {
-		c.Sync.Cache = DefaultCachePath
+	if c.Sync.StateDir == "" {
+		c.Sync.StateDir = DefaultStateDir
 	}
 	if c.Sync.PIDFile == "" {
 		c.Sync.PIDFile = DefaultPIDFile

@@ -25,7 +25,7 @@ func TestSaveLoadStrictConfig(t *testing.T) {
 	if loaded.Wireguard.Interface != DefaultInterface || loaded.Wireguard.MTU != DefaultMTU {
 		t.Fatalf("defaults not applied: %+v", loaded.Wireguard)
 	}
-	if loaded.Sync.Cache != DefaultCachePath || loaded.Sync.PIDFile != DefaultPIDFile {
+	if loaded.Sync.StateDir != DefaultStateDir || loaded.Sync.PIDFile != DefaultPIDFile {
 		t.Fatalf("sync defaults not applied: %+v", loaded.Sync)
 	}
 	if loaded.Sync.Interval.Duration != DefaultInterval {

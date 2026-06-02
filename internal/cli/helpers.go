@@ -58,10 +58,10 @@ func fetchAdminDirectory(ctx context.Context, cfg *config.Config, d drop.Drop) (
 		return dir, nil
 	}
 	newPrinter(os.Stderr).fail("failed to fetch current directory from drop, trying local source; %v", err)
-	if source, sourceErr := cache.ReadSource(cfg.Sync.Cache); sourceErr == nil {
+	if source, sourceErr := cache.ReadSource(cfg.Sync.StateDir); sourceErr == nil {
 		return source, nil
 	}
-	if cached, _, cacheErr := cache.Read(cfg.Sync.Cache); cacheErr == nil {
+	if cached, _, cacheErr := cache.Read(cfg.Sync.StateDir); cacheErr == nil {
 		return cached, nil
 	}
 	return directory.Directory{}, err
@@ -75,15 +75,15 @@ func publishDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir 
 	if err := d.Put(ctx, blob); err != nil {
 		return err
 	}
-	if err := cache.Write(cfg.Sync.Cache, dir, ""); err != nil {
+	if err := cache.Write(cfg.Sync.StateDir, dir, ""); err != nil {
 		return err
 	}
 	if writeSource {
-		if err := cache.WriteSource(cfg.Sync.Cache, dir); err != nil {
+		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
 			return err
 		}
 	}
-	if err := bootstrap.Write(bootstrap.DefaultPath(cfg.Sync.Cache), bootstrap.Network(cfg)); err != nil {
+	if err := bootstrap.Write(bootstrap.DefaultPath(cfg.Sync.StateDir), bootstrap.Network(cfg)); err != nil {
 		return err
 	}
 	return nil

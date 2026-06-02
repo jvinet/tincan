@@ -63,7 +63,7 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 	slog.Info("up starting", "no_sync", noSync, "interface", cfg.Wireguard.Interface)
 	var dir directory.Directory
 	if noSync {
-		cached, _, err := cache.Read(cfg.Sync.Cache)
+		cached, _, err := cache.Read(cfg.Sync.StateDir)
 		if err != nil {
 			return fmt.Errorf("read cache: %w", err)
 		}
@@ -238,7 +238,7 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 		if port, err := manager.ListenPort(); err == nil {
 			lanStore.SetSelf(self.PublicKey, port)
 		}
-		if err := cache.WriteDiscovery(cfg.Sync.Cache, lanStore.Snapshot()); err != nil {
+		if err := cache.WriteDiscovery(cfg.Sync.StateDir, lanStore.Snapshot()); err != nil {
 			slog.Debug("write discovery state failed", "error", err)
 		}
 	}
@@ -343,7 +343,7 @@ func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Ma
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return fmt.Errorf("[observe].enabled requires admin role: %w", err)
 	}
-	source, err := cache.ReadSource(cfg.Sync.Cache)
+	source, err := cache.ReadSource(cfg.Sync.StateDir)
 	if err != nil {
 		return fmt.Errorf("read source directory: %w", err)
 	}

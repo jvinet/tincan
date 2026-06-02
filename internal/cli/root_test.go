@@ -34,14 +34,13 @@ func TestRunInitBindsCommandContext(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
-	cachePath := filepath.Join(dir, "cache.bin")
 
 	code := run([]string{
 		"-c", configPath,
 		"init",
 		"--name", "cortex",
 		"--drop-type", "http",
-		"--cache", cachePath,
+		"--state-dir", dir,
 	}, &stdout, &stderr)
 
 	if code != 0 {
@@ -61,8 +60,8 @@ func TestRunInitBindsCommandContext(t *testing.T) {
 func TestInitConfigMinimalVsFull(t *testing.T) {
 	// Sections/fields the minimal config should omit because they default and
 	// are unlikely to be changed; --full-config materializes all of them.
-	// ([sync] itself appears in both since --cache is an explicit override, but
-	// its defaulted interval/pid_file fields should only show up in --full.)
+	// ([sync] itself appears in both since --state-dir is an explicit override,
+	// but its defaulted interval/pid_file fields should only show up in --full.)
 	defaulted := []string{"interface =", "mtu =", "interval =", "pid_file =", "[observe]", "[discovery]"}
 
 	minimal := initConfig(t, false)
@@ -136,7 +135,7 @@ func initConfig(t *testing.T, full bool) string {
 		"init",
 		"--name", "cortex",
 		"--drop-type", "s3",
-		"--cache", filepath.Join(dir, "cache.bin"),
+		"--state-dir", dir,
 	}
 	if full {
 		args = append(args, "--full-config")

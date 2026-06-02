@@ -47,7 +47,7 @@ func runSyncOnce(ctx context.Context, cfg *config.Config, timeout time.Duration)
 	if err != nil {
 		return syncResult{}, err
 	}
-	if err := cache.Write(cfg.Sync.Cache, dir, ""); err != nil {
+	if err := cache.Write(cfg.Sync.StateDir, dir, ""); err != nil {
 		return syncResult{}, err
 	}
 	return syncResult{Serial: dir.Serial, FromCache: fromCache, Directory: dir}, nil
@@ -58,7 +58,7 @@ func fetchSyncDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, ti
 	defer cancel()
 	blob, err := d.Get(fetchCtx)
 	if err != nil {
-		dir, _, cacheErr := cache.Read(cfg.Sync.Cache)
+		dir, _, cacheErr := cache.Read(cfg.Sync.StateDir)
 		if cacheErr != nil {
 			return directory.Directory{}, false, fmt.Errorf("drop fetch failed (%v) and cache unavailable (%v)", err, cacheErr)
 		}
@@ -68,7 +68,7 @@ func fetchSyncDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, ti
 	if err != nil {
 		return directory.Directory{}, false, err
 	}
-	if cachedSerial, err := cache.ReadSerial(cfg.Sync.Cache); err == nil && directory.IsRollback(dir.Serial, cachedSerial) {
+	if cachedSerial, err := cache.ReadSerial(cfg.Sync.StateDir); err == nil && directory.IsRollback(dir.Serial, cachedSerial) {
 		return directory.Directory{}, false, fmt.Errorf("stale serial %d is older than cached serial %d", dir.Serial, cachedSerial)
 	}
 	return dir, false, nil

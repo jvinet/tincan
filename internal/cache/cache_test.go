@@ -28,14 +28,14 @@ func sampleDir(t *testing.T) directory.Directory {
 }
 
 func TestReadMissingReturnsError(t *testing.T) {
-	_, _, err := Read(filepath.Join(t.TempDir(), "cache.bin"))
+	_, _, err := Read(t.TempDir())
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected os.ErrNotExist, got %v", err)
 	}
 }
 
 func TestReadSerialMissingReturnsError(t *testing.T) {
-	_, err := ReadSerial(filepath.Join(t.TempDir(), "cache.bin"))
+	_, err := ReadSerial(t.TempDir())
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected os.ErrNotExist, got %v", err)
 	}
@@ -43,25 +43,25 @@ func TestReadSerialMissingReturnsError(t *testing.T) {
 
 func TestCacheReadWrite(t *testing.T) {
 	dir := sampleDir(t)
-	path := filepath.Join(t.TempDir(), "state", "cache.bin")
-	if err := Write(path, dir, "etag"); err != nil {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := Write(stateDir, dir, "etag"); err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := Read(path)
+	got, _, err := Read(stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Serial != dir.Serial {
 		t.Fatalf("serial=%d", got.Serial)
 	}
-	serial, err := ReadSerial(path)
+	serial, err := ReadSerial(stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if serial != dir.Serial {
 		t.Fatalf("serial file=%d", serial)
 	}
-	state, err := ReadState(path)
+	state, err := ReadState(stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,10 +71,10 @@ func TestCacheReadWrite(t *testing.T) {
 	if state.LastSync.IsZero() {
 		t.Fatal("state LastSync was not set")
 	}
-	if err := WriteSource(path, dir); err != nil {
+	if err := WriteSource(stateDir, dir); err != nil {
 		t.Fatal(err)
 	}
-	source, err := ReadSource(path)
+	source, err := ReadSource(stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,37 +84,37 @@ func TestCacheReadWrite(t *testing.T) {
 }
 
 func TestCachePathDerivation(t *testing.T) {
-	cachePath := "/var/lib/tincan/cache.bin"
-	if got := config.SerialPath(cachePath); got != "/var/lib/tincan/cache.serial" {
+	stateDir := "/var/lib/tincan"
+	if got := config.CachePath(stateDir); got != "/var/lib/tincan/cache.bin" {
+		t.Fatalf("cache path=%s", got)
+	}
+	if got := config.SerialPath(stateDir); got != "/var/lib/tincan/cache.serial" {
 		t.Fatalf("serial path=%s", got)
 	}
-	if got := config.StatePath(cachePath); got != "/var/lib/tincan/state.json" {
+	if got := config.StatePath(stateDir); got != "/var/lib/tincan/state.json" {
 		t.Fatalf("state path=%s", got)
 	}
-	if got := config.SourcePath(cachePath); got != "/var/lib/tincan/directory-source.bin" {
+	if got := config.SourcePath(stateDir); got != "/var/lib/tincan/directory-source.bin" {
 		t.Fatalf("source path=%s", got)
 	}
 }
 
 func TestReadRejectsCorruptCache(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cache.bin")
-	if err := os.WriteFile(path, []byte("not msgpack"), 0o600); err != nil {
+	stateDir := t.TempDir()
+	if err := os.WriteFile(config.CachePath(stateDir), []byte("not msgpack"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Read(path); err == nil {
+	if _, _, err := Read(stateDir); err == nil {
 		t.Fatal("expected corrupt cache read to fail")
 	}
 }
 
 func TestReadStateRejectsCorruptJSON(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state", "cache.bin")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	stateDir := t.TempDir()
+	if err := os.WriteFile(config.StatePath(stateDir), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(config.StatePath(path), []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadState(path); err == nil {
+	if _, err := ReadState(stateDir); err == nil {
 		t.Fatal("expected corrupt state read to fail")
 	}
 }
@@ -122,7 +122,7 @@ func TestReadStateRejectsCorruptJSON(t *testing.T) {
 func TestWriteRejectsInvalidDirectory(t *testing.T) {
 	dir := sampleDir(t)
 	dir.NetworkCIDR = "not-a-cidr"
-	if err := Write(filepath.Join(t.TempDir(), "cache.bin"), dir, ""); err == nil {
+	if err := Write(t.TempDir(), dir, ""); err == nil {
 		t.Fatal("expected invalid directory write to fail")
 	}
 }

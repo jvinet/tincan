@@ -9,7 +9,6 @@ import (
 const (
 	DefaultConfigPath = "/etc/tincan/config.toml"
 	DefaultStateDir   = "/var/lib/tincan"
-	DefaultCachePath  = DefaultStateDir + "/cache.bin"
 	DefaultPIDFile    = "/run/tincan.pid"
 	DefaultInterface  = "tincan0"
 	DefaultMTU        = 1420
@@ -89,8 +88,11 @@ func (c Config) ReadDrop() DropBackend {
 
 type SyncConfig struct {
 	Interval OptionalDuration `toml:"interval,omitempty"`
-	Cache    string           `toml:"cache,omitempty"`
-	PIDFile  string           `toml:"pid_file,omitempty"`
+	// StateDir is the directory that houses the local cache plus its sibling
+	// state files (cache.serial, state.json, discovery.json, and the admin-only
+	// directory-source.bin / netboot.json). See the Path helpers below.
+	StateDir string `toml:"state_dir,omitempty"`
+	PIDFile  string `toml:"pid_file,omitempty"`
 }
 
 type ObserveConfig struct {
@@ -176,18 +178,26 @@ func (c DropBackend) S3Secure() bool {
 	return *c.Secure
 }
 
-func SourcePath(cachePath string) string {
-	return filepath.Join(filepath.Dir(cachePath), "directory-source.bin")
+// The following helpers map a node's state directory to the individual files
+// it holds. Keeping the layout in one place is why the config records a
+// directory (state_dir) rather than a bare cache file path.
+
+func CachePath(stateDir string) string {
+	return filepath.Join(stateDir, "cache.bin")
 }
 
-func StatePath(cachePath string) string {
-	return filepath.Join(filepath.Dir(cachePath), "state.json")
+func SourcePath(stateDir string) string {
+	return filepath.Join(stateDir, "directory-source.bin")
 }
 
-func SerialPath(cachePath string) string {
-	return filepath.Join(filepath.Dir(cachePath), "cache.serial")
+func StatePath(stateDir string) string {
+	return filepath.Join(stateDir, "state.json")
 }
 
-func DiscoveryStatePath(cachePath string) string {
-	return filepath.Join(filepath.Dir(cachePath), "discovery.json")
+func SerialPath(stateDir string) string {
+	return filepath.Join(stateDir, "cache.serial")
+}
+
+func DiscoveryStatePath(stateDir string) string {
+	return filepath.Join(stateDir, "discovery.json")
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +21,8 @@ type State struct {
 	Serial   uint64    `json:"serial"`
 }
 
-func Read(cachePath string) (directory.Directory, []byte, error) {
-	data, err := os.ReadFile(cachePath)
+func Read(stateDir string) (directory.Directory, []byte, error) {
+	data, err := os.ReadFile(config.CachePath(stateDir))
 	if errors.Is(err, os.ErrNotExist) {
 		return directory.Directory{}, nil, os.ErrNotExist
 	}
@@ -37,19 +36,19 @@ func Read(cachePath string) (directory.Directory, []byte, error) {
 	return dir, data, nil
 }
 
-func Write(cachePath string, dir directory.Directory, etag string) error {
+func Write(stateDir string, dir directory.Directory, etag string) error {
 	payload, err := directory.MarshalPlain(dir)
 	if err != nil {
 		return err
 	}
-	if err := ensureDir(cachePath); err != nil {
+	if err := ensureDir(stateDir); err != nil {
 		return err
 	}
-	if err := renameio.WriteFile(cachePath, payload, 0o600); err != nil {
+	if err := renameio.WriteFile(config.CachePath(stateDir), payload, 0o600); err != nil {
 		return fmt.Errorf("write cache: %w", err)
 	}
 	serial := strconv.FormatUint(dir.Serial, 10) + "\n"
-	if err := renameio.WriteFile(config.SerialPath(cachePath), []byte(serial), 0o600); err != nil {
+	if err := renameio.WriteFile(config.SerialPath(stateDir), []byte(serial), 0o600); err != nil {
 		return fmt.Errorf("write cache serial: %w", err)
 	}
 	state := State{LastSync: time.Now().UTC(), LastETag: etag, Serial: dir.Serial}
@@ -58,14 +57,14 @@ func Write(cachePath string, dir directory.Directory, etag string) error {
 		return fmt.Errorf("encode state: %w", err)
 	}
 	stateBytes = append(stateBytes, '\n')
-	if err := renameio.WriteFile(config.StatePath(cachePath), stateBytes, 0o600); err != nil {
+	if err := renameio.WriteFile(config.StatePath(stateDir), stateBytes, 0o600); err != nil {
 		return fmt.Errorf("write state: %w", err)
 	}
 	return nil
 }
 
-func ReadSerial(cachePath string) (uint64, error) {
-	data, err := os.ReadFile(config.SerialPath(cachePath))
+func ReadSerial(stateDir string) (uint64, error) {
+	data, err := os.ReadFile(config.SerialPath(stateDir))
 	if err != nil {
 		return 0, err
 	}
@@ -76,8 +75,8 @@ func ReadSerial(cachePath string) (uint64, error) {
 	return serial, nil
 }
 
-func ReadState(cachePath string) (State, error) {
-	data, err := os.ReadFile(config.StatePath(cachePath))
+func ReadState(stateDir string) (State, error) {
+	data, err := os.ReadFile(config.StatePath(stateDir))
 	if err != nil {
 		return State{}, err
 	}
@@ -96,8 +95,8 @@ type DiscoveryState struct {
 	LANEndpoints map[string]discovery.LANState `json:"lan_endpoints"`
 }
 
-func WriteDiscovery(cachePath string, snapshot map[string]discovery.LANState) error {
-	if err := ensureDir(cachePath); err != nil {
+func WriteDiscovery(stateDir string, snapshot map[string]discovery.LANState) error {
+	if err := ensureDir(stateDir); err != nil {
 		return err
 	}
 	state := DiscoveryState{UpdatedAt: time.Now().UTC(), LANEndpoints: snapshot}
@@ -106,14 +105,14 @@ func WriteDiscovery(cachePath string, snapshot map[string]discovery.LANState) er
 		return fmt.Errorf("encode discovery state: %w", err)
 	}
 	data = append(data, '\n')
-	if err := renameio.WriteFile(config.DiscoveryStatePath(cachePath), data, 0o600); err != nil {
+	if err := renameio.WriteFile(config.DiscoveryStatePath(stateDir), data, 0o600); err != nil {
 		return fmt.Errorf("write discovery state: %w", err)
 	}
 	return nil
 }
 
-func ReadDiscovery(cachePath string) (DiscoveryState, error) {
-	data, err := os.ReadFile(config.DiscoveryStatePath(cachePath))
+func ReadDiscovery(stateDir string) (DiscoveryState, error) {
+	data, err := os.ReadFile(config.DiscoveryStatePath(stateDir))
 	if err != nil {
 		return DiscoveryState{}, err
 	}
@@ -124,30 +123,30 @@ func ReadDiscovery(cachePath string) (DiscoveryState, error) {
 	return state, nil
 }
 
-func ReadSource(cachePath string) (directory.Directory, error) {
-	data, err := os.ReadFile(config.SourcePath(cachePath))
+func ReadSource(stateDir string) (directory.Directory, error) {
+	data, err := os.ReadFile(config.SourcePath(stateDir))
 	if err != nil {
 		return directory.Directory{}, err
 	}
 	return directory.UnmarshalPlain(data)
 }
 
-func WriteSource(cachePath string, dir directory.Directory) error {
+func WriteSource(stateDir string, dir directory.Directory) error {
 	payload, err := directory.MarshalPlain(dir)
 	if err != nil {
 		return err
 	}
-	if err := ensureDir(cachePath); err != nil {
+	if err := ensureDir(stateDir); err != nil {
 		return err
 	}
-	if err := renameio.WriteFile(config.SourcePath(cachePath), payload, 0o600); err != nil {
+	if err := renameio.WriteFile(config.SourcePath(stateDir), payload, 0o600); err != nil {
 		return fmt.Errorf("write source directory: %w", err)
 	}
 	return nil
 }
 
-func ensureDir(cachePath string) error {
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
+func ensureDir(stateDir string) error {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
 	return nil

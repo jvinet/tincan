@@ -47,8 +47,8 @@ func WithNode(base Bootstrap, node Node) Bootstrap {
 	return base
 }
 
-func DefaultPath(cachePath string) string {
-	return filepath.Join(filepath.Dir(cachePath), "netboot.json")
+func DefaultPath(stateDir string) string {
+	return filepath.Join(stateDir, "netboot.json")
 }
 
 func Write(path string, b Bootstrap) error {

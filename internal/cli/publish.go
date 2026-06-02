@@ -24,7 +24,7 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	if err != nil {
 		return err
 	}
-	source, err := cache.ReadSource(cfg.Sync.Cache)
+	source, err := cache.ReadSource(cfg.Sync.StateDir)
 	if err != nil {
 		return fmt.Errorf("read working directory: %w", err)
 	}

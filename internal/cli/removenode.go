@@ -37,7 +37,7 @@ func (c *RemoveNodeCmd) Run(ctx context.Context, g *Globals) error {
 	}
 	dir.Nodes = append(dir.Nodes[:idx], dir.Nodes[idx+1:]...)
 	if c.NoPublish {
-		if err := cache.WriteSource(cfg.Sync.Cache, dir); err != nil {
+		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
 			return err
 		}
 	} else {
