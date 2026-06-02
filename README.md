@@ -419,7 +419,9 @@ bucket = "my-tincan-net"
 object_key = "directory.bin"    # defaults to "directory.bin"
 access_key = "..."              # admin's read+write key
 secret_key = "..."
-# secure = false                # set to disable TLS (HTTP-only MinIO etc.)
+# tls = false                   # set to false for HTTP-only endpoints (e.g. local MinIO)
+# public_read = true            # on publish, set a bucket policy granting anonymous
+                                # read of the object, so clients need no credentials
 
 [drop.client]
 type = "s3"

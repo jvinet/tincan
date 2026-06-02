@@ -60,7 +60,10 @@ type DropBackend struct {
 	ObjectKey string `toml:"object_key,omitempty"`
 	AccessKey string `toml:"access_key,omitempty"`
 	SecretKey string `toml:"secret_key,omitempty"`
-	Secure    *bool  `toml:"secure,omitempty"`
+	TLS       *bool  `toml:"tls,omitempty"`
+	// PublicRead (s3, admin side) makes `publish` set a bucket policy granting
+	// anonymous read of the published object, so clients need no credentials.
+	PublicRead bool `toml:"public_read,omitempty"`
 
 	URL      string `toml:"url,omitempty"`
 	Username string `toml:"username,omitempty"`
@@ -171,11 +174,13 @@ func (d OptionalDuration) Or(defaultValue time.Duration) time.Duration {
 	return d.Duration
 }
 
-func (c DropBackend) S3Secure() bool {
-	if c.Secure == nil {
+// S3UseTLS reports whether the s3 client should connect over HTTPS. Defaults to
+// true when the tls field is unset.
+func (c DropBackend) S3UseTLS() bool {
+	if c.TLS == nil {
 		return true
 	}
-	return *c.Secure
+	return *c.TLS
 }
 
 // The following helpers map a node's state directory to the individual files

@@ -180,6 +180,29 @@ func TestRequireAdminRejectsMissingAdminDrop(t *testing.T) {
 	}
 }
 
+func TestS3PublicReadAndTLSRoundTrip(t *testing.T) {
+	cfg := validConfig(t)
+	tls := false
+	cfg.Drop = DropConfig{
+		Admin:  DropBackend{Type: "s3", Endpoint: "us-sea-1.linodeobjects.com", Region: "us-sea-1", Bucket: "tincan", AccessKey: "access", SecretKey: "secret", TLS: &tls, PublicRead: true},
+		Client: DropBackend{Type: "s3", Endpoint: "us-sea-1.linodeobjects.com", Region: "us-sea-1", Bucket: "tincan", TLS: &tls},
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Drop.Admin.PublicRead {
+		t.Fatal("public_read did not round-trip")
+	}
+	if loaded.Drop.Admin.S3UseTLS() || loaded.Drop.Client.S3UseTLS() {
+		t.Fatal("tls=false did not round-trip (S3UseTLS should report false)")
+	}
+}
+
 func TestValidateRejectsBadDropFields(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -197,6 +220,8 @@ func TestValidateRejectsBadDropFields(t *testing.T) {
 		{name: "dns provider without token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode"}},
 		{name: "dns token without provider", backend: DropBackend{Type: "dns", Zone: "example.com", APIToken: "tok"}},
 		{name: "dns mixed fields", backend: DropBackend{Type: "dns", Zone: "example.com", Bucket: "bucket"}},
+		{name: "public_read on non-s3", backend: DropBackend{Type: "file", Path: "/tmp/directory.bin", PublicRead: true}},
+		{name: "s3 public_read without credentials", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Bucket: "bucket", PublicRead: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
