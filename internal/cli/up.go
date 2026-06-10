@@ -93,7 +93,7 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 		return err
 	}
 	p.headline("bringing up interface %s", cfg.Wireguard.Interface)
-	if err := manager.Apply(self, dir, nil, nil); err != nil {
+	if _, err := manager.Apply(self, dir, nil, nil); err != nil {
 		slog.Error("apply failed", "error", err)
 		return err
 	}
@@ -137,6 +137,11 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 
 	slog.Info("daemon loop started", "pid", os.Getpid(), "config", configPath)
 	prevModes := map[string]relay.Mode{}
+	// endpointPushedAt records, per peer pubkey, when Apply last pushed an
+	// endpoint into the kernel from configuration. Endpoint observation
+	// consults it so only endpoints validated by a later handshake are ever
+	// republished (see admin.MergeObservations).
+	endpointPushedAt := map[string]time.Time{}
 	for {
 		cfg, err := config.Load(configPath)
 		if err != nil {
@@ -144,7 +149,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			perr.fail("failed to load config; %v", err)
 		} else {
 			timeout := iterationTimeout(cfg.Sync.Interval.Or(config.DefaultInterval))
-			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes, lanStore, &dirHolder); err != nil {
+			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes, lanStore, &dirHolder, endpointPushedAt); err != nil {
 				slog.Warn("daemon iteration failed", "error", err)
 				perr.fail("daemon iteration failed; %v", err)
 			}
@@ -187,7 +192,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	}
 }
 
-func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer, controller *relay.Controller, prevModes map[string]relay.Mode, lanStore *discovery.Store, dirHolder *atomic.Pointer[directory.Directory]) error {
+func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer, controller *relay.Controller, prevModes map[string]relay.Mode, lanStore *discovery.Store, dirHolder *atomic.Pointer[directory.Directory], endpointPushedAt map[string]time.Time) error {
 	res, err := runSyncOnce(ctx, cfg, timeout)
 	if err != nil {
 		return err
@@ -232,8 +237,13 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 			return lanStore.Lookup(pubkey, time.Now())
 		}
 	}
-	if err := manager.Apply(self, res.Directory, decision.Relayed, lanLookup); err != nil {
-		return err
+	pushed, applyErr := manager.Apply(self, res.Directory, decision.Relayed, lanLookup)
+	// Record push times before acting on the error: once ConfigureDevice
+	// succeeded the endpoints are in the kernel, and observation must not
+	// treat them as wire-derived even if a later Apply step failed.
+	recordEndpointPushes(endpointPushedAt, pushed, res.Directory, time.Now())
+	if applyErr != nil {
+		return applyErr
 	}
 	if lanStore != nil {
 		if port, err := manager.ListenPort(); err == nil {
@@ -256,7 +266,7 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 		"relay_target", relayVia,
 	)
 	if cfg.Observe.IsEnabled() {
-		if err := runAdminObservation(ctx, cfg, manager, res.Serial, p); err != nil {
+		if err := runAdminObservation(ctx, cfg, manager, res.Serial, p, endpointPushedAt); err != nil {
 			// Observation defaults on but only applies to admin nodes. When the
 			// operator asked for it explicitly, surface the misconfiguration;
 			// when it is merely the default on a non-admin node, skip quietly.
@@ -267,6 +277,30 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 		}
 	}
 	return nil
+}
+
+// recordEndpointPushes stamps the push time for every peer whose endpoint
+// Apply just wrote into the kernel, and prunes entries for peers that have
+// left the directory so the map doesn't grow across membership churn.
+func recordEndpointPushes(pushedAt map[string]time.Time, pushed []string, dir directory.Directory, now time.Time) {
+	if pushedAt == nil {
+		return
+	}
+	for _, key := range pushed {
+		pushedAt[key] = now
+	}
+	if len(pushedAt) == 0 {
+		return
+	}
+	current := make(map[string]bool, len(dir.Nodes))
+	for i := range dir.Nodes {
+		current[dir.Nodes[i].PublicKey] = true
+	}
+	for key := range pushedAt {
+		if !current[key] {
+			delete(pushedAt, key)
+		}
+	}
 }
 
 // markLANFailures invalidates LAN endpoints for peers that just transitioned
@@ -343,7 +377,7 @@ func logRelayTransitions(p *printer, dir directory.Directory, decision relay.Dec
 	}
 }
 
-func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Manager, syncedSerial uint64, p *printer) error {
+func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Manager, syncedSerial uint64, p *printer, endpointPushedAt map[string]time.Time) error {
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return fmt.Errorf("[observe].enabled requires admin role: %w", err)
 	}
@@ -359,7 +393,7 @@ func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Ma
 		return err
 	}
 	handshakeFresh := cfg.Observe.HandshakeFresh.Or(admin.DefaultHandshakeFresh)
-	updated, changed := admin.MergeObservations(source, peers, time.Now(), handshakeFresh)
+	updated, changed := admin.MergeObservations(source, peers, time.Now(), handshakeFresh, endpointPushedAt)
 	if !changed {
 		return nil
 	}

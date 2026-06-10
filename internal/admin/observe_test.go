@@ -49,7 +49,7 @@ func TestMergeObservationsFirstObservationSets(t *testing.T) {
 		LastHandshakeTime: now.Add(-30 * time.Second),
 	}}
 
-	out, changed := MergeObservations(dir, peers, now, 0)
+	out, changed := MergeObservations(dir, peers, now, 0, nil)
 	if !changed {
 		t.Fatal("expected changed=true")
 	}
@@ -74,7 +74,7 @@ func TestMergeObservationsNoopWhenUnchangedAndFresh(t *testing.T) {
 		LastHandshakeTime: now.Add(-30 * time.Second),
 	}}
 
-	out, changed := MergeObservations(dir, peers, now, 0)
+	out, changed := MergeObservations(dir, peers, now, 0, nil)
 	if changed {
 		t.Fatal("expected changed=false when endpoint matches and oat is fresh")
 	}
@@ -99,7 +99,7 @@ func TestMergeObservationsNoRepublishWhenEndpointUnchangedButOld(t *testing.T) {
 		LastHandshakeTime: now.Add(-30 * time.Second),
 	}}
 
-	out, changed := MergeObservations(dir, peers, now, 0)
+	out, changed := MergeObservations(dir, peers, now, 0, nil)
 	if changed {
 		t.Fatal("expected changed=false: an unchanged endpoint must not republish, however old the observation")
 	}
@@ -120,7 +120,7 @@ func TestMergeObservationsUpdatesWhenEndpointChanges(t *testing.T) {
 		LastHandshakeTime: now.Add(-30 * time.Second),
 	}}
 
-	out, changed := MergeObservations(dir, peers, now, 0)
+	out, changed := MergeObservations(dir, peers, now, 0, nil)
 	if !changed {
 		t.Fatal("expected changed=true when endpoint string differs")
 	}
@@ -144,7 +144,7 @@ func TestMergeObservationsClearsWhenHandshakeStale(t *testing.T) {
 		LastHandshakeTime: now.Add(-DefaultHandshakeFresh - time.Minute),
 	}}
 
-	out, changed := MergeObservations(dir, peers, now, 0)
+	out, changed := MergeObservations(dir, peers, now, 0, nil)
 	if !changed {
 		t.Fatal("expected changed=true when handshake stale and prior observation existed")
 	}
@@ -163,7 +163,7 @@ func TestMergeObservationsClearsWhenPeerAbsent(t *testing.T) {
 		{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2", ObservedEndpoint: "203.0.113.7:41234", ObservedAt: now.Add(-time.Minute)},
 	}}
 
-	out, changed := MergeObservations(dir, nil, now, 0)
+	out, changed := MergeObservations(dir, nil, now, 0, nil)
 	if !changed {
 		t.Fatal("expected changed=true when peer absent from wgctrl and prior observation existed")
 	}
@@ -179,7 +179,7 @@ func TestMergeObservationsNoopWhenAlreadyCleared(t *testing.T) {
 		{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2"},
 	}}
 
-	_, changed := MergeObservations(dir, nil, now, 0)
+	_, changed := MergeObservations(dir, nil, now, 0, nil)
 	if changed {
 		t.Fatal("expected changed=false when nothing to clear")
 	}
@@ -197,7 +197,7 @@ func TestMergeObservationsSkipsNodeWithOperatorEndpoint(t *testing.T) {
 		LastHandshakeTime: now.Add(-30 * time.Second),
 	}}
 
-	out, changed := MergeObservations(dir, peers, now, 0)
+	out, changed := MergeObservations(dir, peers, now, 0, nil)
 	if changed {
 		t.Fatal("expected changed=false for node with operator Endpoint")
 	}
@@ -228,7 +228,7 @@ func TestMergeObservationsMixed(t *testing.T) {
 		{PublicKey: wgKey(t, carolPub), Endpoint: udp(t, "203.0.113.3:6000"), LastHandshakeTime: now.Add(-time.Hour)},
 	}
 
-	out, changed := MergeObservations(dir, peers, now, 0)
+	out, changed := MergeObservations(dir, peers, now, 0, nil)
 	if !changed {
 		t.Fatal("expected changed=true")
 	}
@@ -246,6 +246,83 @@ func TestMergeObservationsMixed(t *testing.T) {
 	}
 }
 
+func TestMergeObservationsSkipsEndpointPushedAfterHandshake(t *testing.T) {
+	// The kernel endpoint was written from configuration *after* the peer's
+	// last handshake, so no handshake has validated it. Publishing it would
+	// let a spoofed LAN-discovery beacon's address be laundered into the
+	// signed directory. The node must be left untouched — including any
+	// previously published observation.
+	_, bobPub := mustWGPub(t)
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	prior := now.Add(-10 * time.Minute)
+	dir := directory.Directory{Nodes: []directory.Node{
+		{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2", ObservedEndpoint: "203.0.113.7:41234", ObservedAt: prior},
+	}}
+	peers := []wgtypes.Peer{{
+		PublicKey:         wgKey(t, bobPub),
+		Endpoint:          udp(t, "198.51.100.66:31337"), // attacker-influenced push
+		LastHandshakeTime: now.Add(-100 * time.Second),
+	}}
+	pushedAt := map[string]time.Time{bobPub: now.Add(-5 * time.Second)}
+
+	out, changed := MergeObservations(dir, peers, now, 0, pushedAt)
+	if changed {
+		t.Fatal("expected changed=false for endpoint pushed after last handshake")
+	}
+	if out.Nodes[0].ObservedEndpoint != "203.0.113.7:41234" || !out.Nodes[0].ObservedAt.Equal(prior) {
+		t.Fatalf("prior observation was disturbed: %+v", out.Nodes[0])
+	}
+}
+
+func TestMergeObservationsRecordsEndpointValidatedByLaterHandshake(t *testing.T) {
+	// A handshake newer than the last push proves the peer really owns the
+	// kernel's current endpoint — record it.
+	_, bobPub := mustWGPub(t)
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	dir := directory.Directory{Nodes: []directory.Node{
+		{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2"},
+	}}
+	peers := []wgtypes.Peer{{
+		PublicKey:         wgKey(t, bobPub),
+		Endpoint:          udp(t, "203.0.113.7:41234"),
+		LastHandshakeTime: now.Add(-30 * time.Second),
+	}}
+	pushedAt := map[string]time.Time{bobPub: now.Add(-2 * time.Minute)}
+
+	out, changed := MergeObservations(dir, peers, now, 0, pushedAt)
+	if !changed {
+		t.Fatal("expected changed=true")
+	}
+	if out.Nodes[0].ObservedEndpoint != "203.0.113.7:41234" {
+		t.Fatalf("ObservedEndpoint=%q", out.Nodes[0].ObservedEndpoint)
+	}
+}
+
+func TestMergeObservationsStillClearsStalePushedPeer(t *testing.T) {
+	// Push-gating must not interfere with the stale-handshake clearing rule:
+	// a peer that stopped handshaking entirely loses its observation even if
+	// an endpoint was pushed for it recently.
+	_, bobPub := mustWGPub(t)
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	dir := directory.Directory{Nodes: []directory.Node{
+		{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2", ObservedEndpoint: "203.0.113.7:41234", ObservedAt: now.Add(-time.Hour)},
+	}}
+	peers := []wgtypes.Peer{{
+		PublicKey:         wgKey(t, bobPub),
+		Endpoint:          udp(t, "203.0.113.7:41234"),
+		LastHandshakeTime: now.Add(-time.Hour),
+	}}
+	pushedAt := map[string]time.Time{bobPub: now.Add(-5 * time.Second)}
+
+	out, changed := MergeObservations(dir, peers, now, 0, pushedAt)
+	if !changed {
+		t.Fatal("expected changed=true (stale observation cleared)")
+	}
+	if out.Nodes[0].ObservedEndpoint != "" || !out.Nodes[0].ObservedAt.IsZero() {
+		t.Fatalf("stale observation not cleared: %+v", out.Nodes[0])
+	}
+}
+
 func TestMergeObservationsDoesNotMutateInput(t *testing.T) {
 	_, bobPub := mustWGPub(t)
 	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
@@ -258,7 +335,7 @@ func TestMergeObservationsDoesNotMutateInput(t *testing.T) {
 		LastHandshakeTime: now.Add(-30 * time.Second),
 	}}
 
-	_, _ = MergeObservations(dir, peers, now, 0)
+	_, _ = MergeObservations(dir, peers, now, 0, nil)
 	if dir.Nodes[0].ObservedEndpoint != "" {
 		t.Fatalf("input directory was mutated: %+v", dir.Nodes[0])
 	}

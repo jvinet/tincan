@@ -21,6 +21,14 @@ const DefaultHandshakeFresh = 3 * time.Minute
 //   - If wgctrl has a recent handshake from the peer (within handshakeFresh)
 //     and the observed source endpoint differs from what's published (which
 //     includes the first-ever observation), the new endpoint is recorded.
+//   - A handshake only vouches for the kernel's current endpoint if it
+//     happened *after* the daemon last pushed an endpoint into the kernel for
+//     that peer (pushedAt, keyed by base64 pubkey; see wg.Manager.Apply).
+//     The kernel cannot distinguish a wire-derived endpoint from one we just
+//     configured, so without this check a recent-but-older handshake would
+//     let a config-pushed endpoint — e.g. a spoofed LAN-discovery beacon's
+//     address — be laundered into the signed directory as "observed". Such
+//     a peer is left untouched until a fresh handshake validates the push.
 //   - If wgctrl has a recent handshake but the observed endpoint is unchanged,
 //     the node is left untouched — we deliberately do NOT re-stamp ObservedAt.
 //     Clients trust a published observed endpoint for as long as it stays in
@@ -28,7 +36,7 @@ const DefaultHandshakeFresh = 3 * time.Minute
 //     churn the serial and force a needless republish.
 //   - If wgctrl has no recent handshake but a prior observation exists in the
 //     directory, it is cleared so clients stop trying a stale endpoint.
-func MergeObservations(dir directory.Directory, peers []wgtypes.Peer, now time.Time, handshakeFresh time.Duration) (directory.Directory, bool) {
+func MergeObservations(dir directory.Directory, peers []wgtypes.Peer, now time.Time, handshakeFresh time.Duration, pushedAt map[string]time.Time) (directory.Directory, bool) {
 	if handshakeFresh <= 0 {
 		handshakeFresh = DefaultHandshakeFresh
 	}
@@ -60,6 +68,11 @@ func MergeObservations(dir directory.Directory, peers []wgtypes.Peer, now time.T
 			now.Sub(peer.LastHandshakeTime) <= handshakeFresh
 
 		if hasFreshHandshake {
+			// Zero pushedAt (never pushed, or pushed before this handshake)
+			// means the endpoint is wire-derived and safe to publish.
+			if !peer.LastHandshakeTime.After(pushedAt[n.PublicKey]) {
+				continue
+			}
 			observed := peer.Endpoint.String()
 			// Only record a genuinely new endpoint (this also covers the first
 			// observation, where ObservedEndpoint is still empty). An unchanged

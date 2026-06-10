@@ -51,18 +51,26 @@ func (m *Manager) Up() error {
 	return nil
 }
 
-func (m *Manager) Apply(self directory.Node, dir directory.Directory, relayed map[string]bool, lanLookup LANEndpointLookup) error {
+// Apply reconciles the WireGuard device against the directory. It returns
+// the base64 public keys of peers whose endpoint was pushed from
+// configuration by this call — as opposed to endpoints the kernel learned
+// from the wire, which preserveLiveEndpoints left alone. The admin's
+// endpoint observation uses this to refuse to republish an endpoint that
+// no handshake has validated yet (see admin.MergeObservations). The pushed
+// list is valid even when Apply returns an error, as long as the
+// ConfigureDevice call itself succeeded.
+func (m *Manager) Apply(self directory.Node, dir directory.Directory, relayed map[string]bool, lanLookup LANEndpointLookup) ([]string, error) {
 	link, err := netlink.LinkByName(m.iface)
 	if err != nil {
-		return fmt.Errorf("find link %q: %w", m.iface, err)
+		return nil, fmt.Errorf("find link %q: %w", m.iface, err)
 	}
 	peers, err := BuildPeerConfigs(m.wg, self, dir, relayed, lanLookup)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	client, err := wgctrl.New()
 	if err != nil {
-		return fmt.Errorf("open wgctrl: %w", err)
+		return nil, fmt.Errorf("open wgctrl: %w", err)
 	}
 	defer client.Close()
 	peers = mergeAgainstKernel(client, m.iface, peers)
@@ -72,22 +80,38 @@ func (m *Manager) Apply(self directory.Node, dir directory.Directory, relayed ma
 		ReplacePeers: false,
 		Peers:        peers,
 	}); err != nil {
-		return fmt.Errorf("configure WireGuard device: %w", err)
+		return nil, fmt.Errorf("configure WireGuard device: %w", err)
 	}
+	pushed := pushedEndpointKeys(peers)
 	if err := ensureAddress(link, self.TunnelIP); err != nil {
-		return err
+		return pushed, err
 	}
 	if err := ensureRoute(link, dir.NetworkCIDR); err != nil {
-		return err
+		return pushed, err
 	}
-	return nil
+	return pushed, nil
+}
+
+// pushedEndpointKeys lists the peers whose PeerConfig still carries an
+// Endpoint after mergeAgainstKernel — exactly the set whose kernel endpoint
+// the ConfigureDevice call overwrote from configuration.
+func pushedEndpointKeys(peers []wgtypes.PeerConfig) []string {
+	var pushed []string
+	for i := range peers {
+		if peers[i].Remove || peers[i].Endpoint == nil {
+			continue
+		}
+		pushed = append(pushed, peers[i].PublicKey.String())
+	}
+	return pushed
 }
 
 func (m *Manager) Ensure(self directory.Node, dir directory.Directory, relayed map[string]bool) error {
 	if err := m.Up(); err != nil {
 		return err
 	}
-	return m.Apply(self, dir, relayed, nil)
+	_, err := m.Apply(self, dir, relayed, nil)
+	return err
 }
 
 // mergeAgainstKernel adapts a freshly-built peer list for use with
