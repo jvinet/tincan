@@ -24,6 +24,7 @@ type App struct {
 	AddNode    AddNodeCmd    `cmd:"" name:"add-node" help:"Add a node to the directory."`
 	RemoveNode RemoveNodeCmd `cmd:"" name:"remove-node" help:"Remove a node from the directory."`
 	ListNodes  ListNodesCmd  `cmd:"" name:"list-nodes" help:"List nodes in the directory."`
+	RenderNode RenderNodeCmd `cmd:"" name:"render-node" help:"Render a plain-WireGuard config for an existing directory node."`
 	Publish    PublishCmd    `cmd:"" help:"Publish the admin working directory."`
 	Sync       SyncCmd       `cmd:"" help:"Fetch the latest directory from the dead-drop."`
 	Up         UpCmd         `cmd:"" help:"Bring the WireGuard interface up and apply the directory."`

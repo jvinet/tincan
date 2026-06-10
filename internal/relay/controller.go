@@ -140,16 +140,15 @@ func logDecision(node directory.Node, prev, next PeerState, kp wgtypes.Peer, now
 	)
 }
 
-// pickRelayTarget returns the first node in the directory (excluding self)
-// with a non-empty Endpoint. Multi-relay topologies aren't supported yet.
+// pickRelayTarget returns the relay node for self, or nil if none exists. It
+// defers to directory.RelayTarget — a node explicitly marked Relay, else the
+// first non-self node with a public Endpoint — so the controller's choice
+// matches the one wg.BuildPeerConfigs uses to fold AllowedIPs and the one
+// `status` displays. They must agree, or routing and reporting diverge.
+// Multi-relay topologies aren't supported yet.
 func pickRelayTarget(dir directory.Directory, selfPub string) *directory.Node {
-	for i := range dir.Nodes {
-		if dir.Nodes[i].PublicKey == selfPub {
-			continue
-		}
-		if dir.Nodes[i].Endpoint != "" {
-			return &dir.Nodes[i]
-		}
+	if target, ok := directory.RelayTarget(dir, selfPub); ok {
+		return &target
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ type InitCmd struct {
 	DropType   string `required:"" enum:"s3,http,file,dns" help:"Dead-drop backend type."`
 	CIDR       string `default:"10.42.0.0/24" help:"Tunnel network CIDR."`
 	Endpoint   string `help:"Published endpoint for this node, as host:port."`
+	Relay      bool   `help:"Mark this admin node as a relay: peers route through it when a direct path is unavailable (requires --endpoint)."`
 	StateDir   string `type:"path" help:"Directory for the cache and sibling state files (default /var/lib/tincan)."`
 	FullConfig bool   `help:"Write every applicable section and field at its default, not just the fields likely to be changed."`
 	Force      bool   `help:"Overwrite an existing config."`
@@ -51,6 +52,9 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	listenPort, err := listenPortFromEndpoint(c.Endpoint)
 	if err != nil {
 		return err
+	}
+	if c.Relay && c.Endpoint == "" {
+		return fmt.Errorf("--relay requires --endpoint host:port: a relay must publish a reachable address")
 	}
 	stateDir := config.DefaultStateDir
 	if c.StateDir != "" {
@@ -95,6 +99,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 			TunnelIP:     tunnelIP,
 			AgeRecipient: networkRecipient,
 			Endpoint:     c.Endpoint,
+			Relay:        c.Relay,
 		}},
 	}
 	if err := cache.WriteSource(stateDir, dir); err != nil {

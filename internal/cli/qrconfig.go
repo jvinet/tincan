@@ -13,20 +13,13 @@ import (
 )
 
 // peerHub returns the directory node that a plain WireGuard (non-Tincan) client
-// should peer with in hub-and-spoke mode: the first node, other than the one
-// being enrolled, that publishes a reachable endpoint. This is the same rule
-// the daemon and `status` use to pick a relay target (see
-// wg.BuildPeerConfigs and status.go). ok is false when no such node exists.
+// should peer with in hub-and-spoke mode. It is the network's relay target
+// (see directory.RelayTarget): a node explicitly marked Relay, else the first
+// node other than the one being enrolled that publishes a reachable endpoint —
+// the same node the daemon and `status` route relayed traffic through. ok is
+// false when no such node exists.
 func peerHub(dir directory.Directory, selfPubKey string) (directory.Node, bool) {
-	for i := range dir.Nodes {
-		if dir.Nodes[i].PublicKey == selfPubKey {
-			continue
-		}
-		if dir.Nodes[i].Endpoint != "" {
-			return dir.Nodes[i], true
-		}
-	}
-	return directory.Node{}, false
+	return directory.RelayTarget(dir, selfPubKey)
 }
 
 // renderWGQuickConfig builds a standard wg-quick INI config for a plain
@@ -34,13 +27,23 @@ func peerHub(dir directory.Directory, selfPubKey string) (directory.Node, bool) 
 // through a single hub peer. The mobile WireGuard apps consume exactly this
 // text, whether read from a file or decoded from a scanned QR code.
 //
+// When privateKey is empty the PrivateKey line is emitted as a placeholder
+// comment — `render-node` does this when the operator hasn't supplied the
+// node's key (which the admin never stores), producing a template the node
+// owner completes locally. add-node always passes the freshly generated key,
+// so it never hits the placeholder path.
+//
 // The result is a point-in-time snapshot. Such a client does not run Tincan, so
 // it will not track later directory changes (rotated keys, new or moved
 // endpoints, membership) — re-enroll it to refresh.
 func renderWGQuickConfig(privateKey, tunnelIP, networkCIDR string, hub directory.Node) string {
 	var b strings.Builder
 	b.WriteString("[Interface]\n")
-	fmt.Fprintf(&b, "PrivateKey = %s\n", privateKey)
+	if privateKey == "" {
+		b.WriteString("# PrivateKey = <paste this node's WireGuard private key>\n")
+	} else {
+		fmt.Fprintf(&b, "PrivateKey = %s\n", privateKey)
+	}
 	fmt.Fprintf(&b, "Address = %s/32\n", tunnelIP)
 	b.WriteString("\n[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", hub.PublicKey)

@@ -46,6 +46,27 @@ func TestControllerSkipsRelayWhenSelfHasEndpoint(t *testing.T) {
 	}
 }
 
+// The controller's relay target must honor the explicit Relay flag, choosing a
+// marked node over an earlier endpoint-bearing one — and it must match what
+// wg.BuildPeerConfigs picks, or routing diverges from the relay decision.
+func TestControllerPrefersMarkedRelay(t *testing.T) {
+	selfPub := mustWGKey(t)
+	firstPub := mustWGKey(t)
+	markedPub := mustWGKey(t)
+	self := directory.Node{PublicKey: selfPub, TunnelIP: "10.42.0.1"}
+	dir := directory.Directory{Nodes: []directory.Node{
+		self,
+		{PublicKey: firstPub, TunnelIP: "10.42.0.2", Endpoint: "first.example.com:51820"},
+		{PublicKey: markedPub, TunnelIP: "10.42.0.3", Endpoint: "relay.example.com:51820", Relay: true},
+	}}
+
+	c := NewController(Config{})
+	dec := c.Update(self, dir, nil, time.Now())
+	if dec.RelayTarget == nil || dec.RelayTarget.PublicKey != markedPub {
+		t.Fatalf("expected the marked relay as target, got %+v", dec.RelayTarget)
+	}
+}
+
 func TestControllerSkipsWhenNoRelayTarget(t *testing.T) {
 	selfPub := mustWGKey(t)
 	peerPub := mustWGKey(t)

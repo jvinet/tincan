@@ -35,6 +35,7 @@ func (c *ListNodesCmd) Run(ctx context.Context, g *Globals) error {
 		p.styledCell(ansiDim, "IP"),
 		p.styledCell(ansiDim, "PUBLIC KEY"),
 		p.styledCell(ansiDim, "ENDPOINT"),
+		p.styledCell(ansiDim, "ROLE"),
 	}}
 	for _, node := range dir.Nodes {
 		pub := node.PublicKey
@@ -45,11 +46,16 @@ func (c *ListNodesCmd) Run(ctx context.Context, g *Globals) error {
 		if endpoint == "" {
 			endpoint = "-"
 		}
+		role := "-"
+		if node.Relay {
+			role = "relay"
+		}
 		rows = append(rows, []tableCell{
 			plainCell(node.Name),
 			plainCell(node.TunnelIP),
 			plainCell(pub),
 			plainCell(endpoint),
+			plainCell(role),
 		})
 	}
 	p.table("  ", "  ", rows)

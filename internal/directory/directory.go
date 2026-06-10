@@ -24,8 +24,15 @@ type Node struct {
 	// sealed to the recipients of all members that have one, so each node
 	// decrypts with its own identity. Empty for plain-WireGuard members,
 	// which don't run Tincan and never read the directory.
-	AgeRecipient     string    `msgpack:"age,omitempty"`
-	Endpoint         string    `msgpack:"ep,omitempty"`
+	AgeRecipient string `msgpack:"age,omitempty"`
+	Endpoint     string `msgpack:"ep,omitempty"`
+	// Relay marks this node as a designated relay: peers that can't reach a
+	// destination directly route through it. When any node sets this, relay
+	// selection prefers the marked node(s) over the implicit "first node with
+	// an endpoint" fallback, making the relay path intentional rather than
+	// dependent on directory order. A relay must also publish an Endpoint —
+	// a node with no reachable address can't carry anyone's traffic.
+	Relay            bool      `msgpack:"relay,omitempty"`
 	ObservedEndpoint string    `msgpack:"oep,omitempty"`
 	ObservedAt       time.Time `msgpack:"oat,omitempty"`
 	PSK              string    `msgpack:"psk,omitempty"`
@@ -34,4 +41,37 @@ type Node struct {
 type Envelope struct {
 	Payload   []byte `msgpack:"p"`
 	Signature []byte `msgpack:"sig"`
+}
+
+// RelayTarget returns the node that peers should route through when a direct
+// path to a destination is unavailable, and whether such a node exists.
+//
+// A relay must publish a reachable Endpoint — a node with no address can't
+// carry anyone's traffic, so endpoint-less nodes are never selected (even if
+// flagged). Among reachable nodes, those explicitly marked Relay win, in
+// directory order; if none are marked, the first reachable non-self node is
+// used, preserving the original "first node with an endpoint" behavior so a
+// directory that sets no roles relays exactly as before.
+//
+// selfPubKey is excluded so a node never picks itself; pass "" to consider
+// every node — e.g. choosing a hub for a plain-WireGuard client that is not
+// yet (or never will be) in the directory.
+func RelayTarget(dir Directory, selfPubKey string) (Node, bool) {
+	fallback := -1
+	for i := range dir.Nodes {
+		n := dir.Nodes[i]
+		if n.PublicKey == selfPubKey || n.Endpoint == "" {
+			continue
+		}
+		if n.Relay {
+			return n, true
+		}
+		if fallback < 0 {
+			fallback = i
+		}
+	}
+	if fallback >= 0 {
+		return dir.Nodes[fallback], true
+	}
+	return Node{}, false
 }

@@ -24,6 +24,7 @@ type AddNodeCmd struct {
 	ClientType string `name:"client-type" enum:"tincan,wireguard" default:"tincan" help:"Kind of client being enrolled: 'tincan' (runs the Tincan agent) or 'wireguard' (plain WireGuard, e.g. a phone)."`
 	PubKey     string `help:"Existing WireGuard public key for the node."`
 	Endpoint   string `help:"Published endpoint for the node, as host:port."`
+	Relay      bool   `help:"Mark this node as a relay: peers route through it when a direct path is unavailable (requires --endpoint)."`
 	NoPublish  bool   `name:"no-publish" help:"Save changes to the working directory without publishing to the drop."`
 
 	Bootstrap    string `group:"tincanclient" type:"path" help:"Write a node bootstrap JSON file at this path."`
@@ -139,7 +140,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		}
 	}
 
-	dir.Nodes = append(dir.Nodes, directory.Node{Name: c.Name, PublicKey: publicKey, TunnelIP: tunnelIP, AgeRecipient: ageRecipient, Endpoint: c.Endpoint})
+	dir.Nodes = append(dir.Nodes, directory.Node{Name: c.Name, PublicKey: publicKey, TunnelIP: tunnelIP, AgeRecipient: ageRecipient, Endpoint: c.Endpoint, Relay: c.Relay})
 	if c.NoPublish {
 		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
 			return err
@@ -180,6 +181,9 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	items := []pair{
 		kv("allocated IP", tunnelIP),
 		kv("public key", publicKey),
+	}
+	if c.Relay {
+		items = append(items, kv("role", "relay"))
 	}
 	// Keep generated secrets out of the scrollback whenever they already ride
 	// in an artifact: the wg-quick QR/conf for a WireGuard client, or the
@@ -245,6 +249,11 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 // at least one required, since they tell us which artifact to generate).
 func (c *AddNodeCmd) validateFlags() error {
 	anyWG := c.WGQR || c.WGQRPNG != "" || c.WGConfig != ""
+	// A relay carries other peers' traffic, so it must be reachable. Catch the
+	// missing endpoint here, before the node is added, regardless of client type.
+	if c.Relay && c.Endpoint == "" {
+		return errors.New("--relay requires --endpoint host:port: a relay must publish a reachable address")
+	}
 	switch c.ClientType {
 	case clientWireGuard:
 		if c.Bootstrap != "" {
@@ -255,6 +264,9 @@ func (c *AddNodeCmd) validateFlags() error {
 		}
 		if c.PubKey != "" {
 			return errors.New("--client-type=wireguard delivers a generated private key in its artifacts; omit --pub-key so tincan generates the keypair")
+		}
+		if c.Relay {
+			return errors.New("--relay applies to --client-type=tincan; a plain WireGuard client is a hub-and-spoke spoke, not a relay")
 		}
 	default: // tincan
 		if anyWG {

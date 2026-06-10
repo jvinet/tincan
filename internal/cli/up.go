@@ -85,7 +85,10 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 		if res.FromCache && res.StaleErr != nil {
 			slog.Warn("drop unreachable during up, serving stale cache", "error", res.StaleErr, "serial", res.Serial)
 		}
-		p.reportSync(res)
+		if age, stale := directoryStale(res.Directory, cfg.Sync.MaxDirectoryAge.Duration); stale {
+			slog.Warn("directory older than max_directory_age", "age", age.Truncate(time.Second), "max", cfg.Sync.MaxDirectoryAge.Duration, "serial", res.Serial)
+		}
+		p.reportSync(res, cfg.Sync.MaxDirectoryAge.Duration)
 		dir = res.Directory
 	}
 	self, err := findSelf(cfg, dir)
@@ -255,7 +258,10 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if res.FromCache && res.StaleErr != nil {
 		slog.Warn("drop unreachable, serving stale cache", "error", res.StaleErr, "serial", res.Serial)
 	}
-	p.reportSync(res)
+	if age, stale := directoryStale(res.Directory, cfg.Sync.MaxDirectoryAge.Duration); stale {
+		slog.Warn("directory older than max_directory_age", "age", age.Truncate(time.Second), "max", cfg.Sync.MaxDirectoryAge.Duration, "serial", res.Serial)
+	}
+	p.reportSync(res, cfg.Sync.MaxDirectoryAge.Duration)
 	if dirHolder != nil {
 		dirCopy := res.Directory
 		dirHolder.Store(&dirCopy)

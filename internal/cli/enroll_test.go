@@ -116,6 +116,68 @@ func TestEnrollWiresAgeIdentity(t *testing.T) {
 	}
 }
 
+// `add-node --relay --endpoint` marks the node as a relay in the directory, so
+// directory.RelayTarget prefers it over the implicit first-endpoint fallback.
+func TestAddNodeMarksRelay(t *testing.T) {
+	admin, dir := testFlowConfigAndDirectory(t, 1)
+	if err := cache.WriteSource(admin.Sync.StateDir, dir); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	adminCfg := filepath.Join(t.TempDir(), "admin.toml")
+	if err := config.Save(adminCfg, *admin); err != nil {
+		t.Fatalf("save admin config: %v", err)
+	}
+	bsPath := filepath.Join(t.TempDir(), "relay.json")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-c", adminCfg, "add-node", "--name", "relay",
+		"--endpoint", "relay.example:51820", "--relay",
+		"--bootstrap", bsPath, "--no-publish",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("add-node exit=%d; stderr=%q", code, stderr.String())
+	}
+	src, err := cache.ReadSource(admin.Sync.StateDir)
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	node, _, ok := nodeByName(src, "relay")
+	if !ok {
+		t.Fatal("relay node was not added")
+	}
+	if !node.Relay {
+		t.Fatal("node was not marked as a relay")
+	}
+}
+
+// A relay must be reachable, so --relay without --endpoint is rejected before
+// the node is added.
+func TestAddNodeRelayRequiresEndpoint(t *testing.T) {
+	admin, dir := testFlowConfigAndDirectory(t, 1)
+	if err := cache.WriteSource(admin.Sync.StateDir, dir); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	adminCfg := filepath.Join(t.TempDir(), "admin.toml")
+	if err := config.Save(adminCfg, *admin); err != nil {
+		t.Fatalf("save admin config: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-c", adminCfg, "add-node", "--name", "relay", "--relay",
+		"--bootstrap", filepath.Join(t.TempDir(), "relay.json"), "--no-publish",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("add-node accepted --relay without --endpoint")
+	}
+	src, err := cache.ReadSource(admin.Sync.StateDir)
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	if _, _, ok := nodeByName(src, "relay"); ok {
+		t.Fatal("rejected --relay left a half-added node in the directory")
+	}
+}
+
 // A malformed --endpoint must fail before the node is added to the directory,
 // so a bad port leaves no half-enrolled node behind.
 func TestAddNodeRejectsMalformedEndpoint(t *testing.T) {

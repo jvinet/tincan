@@ -99,6 +99,15 @@ type SyncConfig struct {
 	// directory-source.bin / netboot.json). See the Path helpers below.
 	StateDir string `toml:"state_dir,omitempty"`
 	PIDFile  string `toml:"pid_file,omitempty"`
+	// MaxDirectoryAge, when set, makes sync/up/status warn once the active
+	// directory's CreatedAt is older than this. The monotonic serial guard
+	// stops rollback to an *older* directory but not a drop frozen at the
+	// current serial: a withholding adversary (or a stalled admin/CI pipeline)
+	// can serve a still-valid directory forever. Operators who republish on a
+	// cadence — `tincan publish` always re-stamps CreatedAt, so a cron'd
+	// publish is a freshness heartbeat — set this to roughly two cadences to
+	// notice a freeze. Unset (the default) disables the warning.
+	MaxDirectoryAge OptionalDuration `toml:"max_directory_age,omitempty"`
 }
 
 type ObserveConfig struct {

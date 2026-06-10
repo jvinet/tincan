@@ -68,6 +68,7 @@ type wireNode struct {
 	TunnelIP         []byte    `msgpack:"ip"`
 	AgeRecipient     string    `msgpack:"age,omitempty"`
 	Endpoint         string    `msgpack:"ep,omitempty"`
+	Relay            bool      `msgpack:"relay,omitempty"`
 	ObservedEndpoint string    `msgpack:"oep,omitempty"`
 	ObservedAt       time.Time `msgpack:"oat,omitempty"`
 	PSK              []byte    `msgpack:"psk,omitempty"`
@@ -108,6 +109,7 @@ func (n Node) toWire() (wireNode, error) {
 		TunnelIP:         ip4[:],
 		AgeRecipient:     n.AgeRecipient,
 		Endpoint:         n.Endpoint,
+		Relay:            n.Relay,
 		ObservedEndpoint: n.ObservedEndpoint,
 		ObservedAt:       n.ObservedAt,
 	}
@@ -135,6 +137,7 @@ func (n *Node) fromWire(w wireNode) error {
 	n.TunnelIP = netip.AddrFrom4(ip4).String()
 	n.AgeRecipient = w.AgeRecipient
 	n.Endpoint = w.Endpoint
+	n.Relay = w.Relay
 	n.ObservedEndpoint = w.ObservedEndpoint
 	n.ObservedAt = w.ObservedAt
 	n.PSK = ""
@@ -146,6 +149,28 @@ func (n *Node) fromWire(w wireNode) error {
 		n.PSK = psk
 	}
 	return nil
+}
+
+// signingDomain is the domain-separation prefix mixed into the bytes the
+// publisher signs (and verifies). Ed25519 signs whatever bytes it is given;
+// without a context tag, a signature the publisher key produces over a
+// directory payload is, bit-for-bit, also a valid signature over any other
+// structure that happens to share those bytes — so a key reused in another
+// protocol (or a future tincan message type) could have its signatures
+// cross-confused. Prefixing a fixed, schema-versioned label binds every
+// signature to "a tincan directory of this schema version" and nothing else.
+// The trailing NUL keeps the label from running into the payload. Changing
+// this string invalidates every existing signature, so it tracks
+// SchemaVersion: a v2 signature can never be replayed as a future v3.
+var signingDomain = []byte("tincan directory v2 signature\x00")
+
+// signingBytes returns the exact byte string the publisher key signs: the
+// domain prefix followed by the marshaled directory payload. Seal and Open
+// must agree on this, so both route through here.
+func signingBytes(payload []byte) []byte {
+	b := make([]byte, 0, len(signingDomain)+len(payload))
+	b = append(b, signingDomain...)
+	return append(b, payload...)
 }
 
 // Seal signs the directory with the publisher key and encrypts it to the age
@@ -171,7 +196,7 @@ func Seal(dir Directory, publisherPrivateKey string) ([]byte, error) {
 	}
 	envelope := Envelope{
 		Payload:   payload,
-		Signature: ed25519.Sign(publisherKey, payload),
+		Signature: ed25519.Sign(publisherKey, signingBytes(payload)),
 	}
 	envelopeBytes, err := msgpack.Marshal(envelope)
 	if err != nil {
@@ -254,7 +279,7 @@ func Open(blob []byte, networkIdentity string, publisherPublicKey string) (Direc
 	if len(envelope.Payload) == 0 || len(envelope.Signature) == 0 {
 		return Directory{}, nil, errors.New("directory envelope missing payload or signature")
 	}
-	if !ed25519.Verify(publisherKey, envelope.Payload, envelope.Signature) {
+	if !ed25519.Verify(publisherKey, signingBytes(envelope.Payload), envelope.Signature) {
 		return Directory{}, nil, errors.New("directory signature verification failed")
 	}
 	dir, err := UnmarshalPlain(envelope.Payload)

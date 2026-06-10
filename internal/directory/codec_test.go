@@ -227,6 +227,49 @@ func TestOpenRejectsTamperedBlob(t *testing.T) {
 	}
 }
 
+// The publisher signs a domain-separated message (signingDomain || payload),
+// not the bare payload. A signature over just the payload — what a key reused
+// in another context, or a pre-domain-separation tincan, would produce — must
+// be rejected. This guards the domain tag against being silently dropped.
+func TestSignatureIsDomainSeparated(t *testing.T) {
+	publisherPub, publisherPriv, err := keys.GenerateEd25519Keypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, identity := sampleDirectory(t)
+	payload, err := MarshalPlain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signKey, err := keys.DecodeEd25519Private(publisherPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sign the bare payload, omitting the domain prefix Seal would prepend.
+	envBytes, err := msgpack.Marshal(Envelope{Payload: payload, Signature: ed25519.Sign(signKey, payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := keys.ParseAgeIdentity(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encrypted bytes.Buffer
+	w, err := age.Encrypt(&encrypted, id.Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(envBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Open(encrypted.Bytes(), identity, publisherPub); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("expected an undomained signature to be rejected, got %v", err)
+	}
+}
+
 func TestOpenRejectsOversizedBlob(t *testing.T) {
 	identity, _, err := keys.GenerateAgeIdentity()
 	if err != nil {
@@ -371,7 +414,7 @@ func TestNodeWireRoundTrip(t *testing.T) {
 	cases := []Node{
 		{Name: "minimal", PublicKey: pub, TunnelIP: "10.42.0.9"},
 		{Name: "full", PublicKey: pub, TunnelIP: "10.42.0.250",
-			Endpoint: "host.example:51820", ObservedEndpoint: "203.0.113.7:7000",
+			Endpoint: "host.example:51820", Relay: true, ObservedEndpoint: "203.0.113.7:7000",
 			ObservedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC), PSK: psk},
 	}
 	for _, want := range cases {

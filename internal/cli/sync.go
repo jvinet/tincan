@@ -24,7 +24,7 @@ func (c *SyncCmd) Run(ctx context.Context, g *Globals) error {
 	if err != nil {
 		return err
 	}
-	newPrinter(os.Stdout).reportSync(res)
+	newPrinter(os.Stdout).reportSync(res, cfg.Sync.MaxDirectoryAge.Duration)
 	return nil
 }
 
@@ -51,11 +51,30 @@ func syncSource(res syncResult) string {
 // reason. The backends preserve distinct sentinels (not-found / auth /
 // forbidden / transient); collapsing them all into "unreachable" hides
 // permanent misconfigurations behind what looks like a passing network blip.
-func (p *printer) reportSync(res syncResult) {
+//
+// maxDirectoryAge (0 = off) is the operator's freshness threshold: when the
+// directory's CreatedAt is older than it, a second warning flags a possibly
+// frozen or withheld drop.
+func (p *printer) reportSync(res syncResult, maxDirectoryAge time.Duration) {
 	p.headline("synced from %s (serial: %d)", syncSource(res), res.Serial)
 	if res.FromCache && res.StaleErr != nil {
 		p.warn("%s; serving cached serial %d", dropErrorAdvice(res.StaleErr), res.Serial)
 	}
+	if age, stale := directoryStale(res.Directory, maxDirectoryAge); stale {
+		p.warn("directory is %s old, exceeding max_directory_age %s; the admin may not have published recently, or the drop may be frozen", age.Truncate(time.Second), maxDirectoryAge)
+	}
+}
+
+// directoryStale reports whether dir was created longer ago than maxAge, along
+// with the directory's current age for display. maxAge of 0 (the unset
+// default) disables the check. See SyncConfig.MaxDirectoryAge for why
+// freshness is a distinct signal from the rollback-protecting serial.
+func directoryStale(dir directory.Directory, maxAge time.Duration) (time.Duration, bool) {
+	if maxAge <= 0 || dir.CreatedAt.IsZero() {
+		return 0, false
+	}
+	age := time.Since(dir.CreatedAt)
+	return age, age > maxAge
 }
 
 // dropErrorAdvice turns a drop fetch error into an actionable one-liner.

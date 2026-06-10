@@ -18,19 +18,21 @@ import (
 )
 
 type StatusCmd struct {
-	JSON bool `help:"Emit status as JSON."`
+	JSON    bool `help:"Emit status as JSON."`
+	Network bool `help:"Show a network-wide roster — every directory node with its role, reachability, and handshake age as seen from this node — instead of local status."`
 }
 
 type statusOutput struct {
-	Name       string                 `json:"name"`
-	Interface  string                 `json:"interface"`
-	TunnelIP   string                 `json:"tunnel_ip,omitempty"`
-	Cache      map[string]interface{} `json:"cache"`
-	Daemon     map[string]interface{} `json:"daemon"`
-	Drop       map[string]interface{} `json:"drop"`
-	WireGuard  map[string]interface{} `json:"wireguard"`
-	Discovery  map[string]interface{} `json:"discovery,omitempty"`
-	NATWarning string                 `json:"nat_warning,omitempty"`
+	Name         string                 `json:"name"`
+	Interface    string                 `json:"interface"`
+	TunnelIP     string                 `json:"tunnel_ip,omitempty"`
+	Cache        map[string]interface{} `json:"cache"`
+	Daemon       map[string]interface{} `json:"daemon"`
+	Drop         map[string]interface{} `json:"drop"`
+	WireGuard    map[string]interface{} `json:"wireguard"`
+	Discovery    map[string]interface{} `json:"discovery,omitempty"`
+	NATWarning   string                 `json:"nat_warning,omitempty"`
+	StaleWarning string                 `json:"stale_warning,omitempty"`
 }
 
 type statusPeer struct {
@@ -55,6 +57,9 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 	if err != nil {
 		return err
 	}
+	if c.Network {
+		return runNetworkStatus(cfg, c.JSON)
+	}
 	out := statusOutput{
 		Name:      cfg.Wireguard.Name,
 		Interface: cfg.Wireguard.Interface,
@@ -67,6 +72,10 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 	if dir, _, err := cache.Read(cfg.Sync.StateDir); err == nil {
 		out.Cache["serial"] = dir.Serial
 		out.Cache["path"] = config.CachePath(cfg.Sync.StateDir)
+		out.Cache["created_at"] = dir.CreatedAt
+		if age, stale := directoryStale(dir, cfg.Sync.MaxDirectoryAge.Duration); stale {
+			out.StaleWarning = fmt.Sprintf("directory is %s old, exceeding max_directory_age %s; the admin may not have published recently, or the drop may be frozen", age.Truncate(time.Second), cfg.Sync.MaxDirectoryAge.Duration)
+		}
 		for _, node := range dir.Nodes {
 			nodesByPubkey[node.PublicKey] = node
 		}
@@ -240,17 +249,12 @@ func wireGuardPeerStatus(peers []wgtypes.Peer, dir directory.Directory, self dir
 		peerByPubkey[p.PublicKey.String()] = p
 	}
 
-	// Identify the relay target. Same rule as the daemon: first non-self node
-	// in directory with a public Endpoint set.
+	// Identify the relay target via the same selector the daemon uses
+	// (directory.RelayTarget: a marked relay, else the first node with an
+	// endpoint), so status reflects the real routing decision.
 	var relayTarget *directory.Node
-	for i := range dir.Nodes {
-		if dir.Nodes[i].PublicKey == self.PublicKey {
-			continue
-		}
-		if dir.Nodes[i].Endpoint != "" {
-			relayTarget = &dir.Nodes[i]
-			break
-		}
+	if target, ok := directory.RelayTarget(dir, self.PublicKey); ok {
+		relayTarget = &target
 	}
 
 	// Build the set of tunnel IPs the relay target's wgctrl peer covers
@@ -373,6 +377,10 @@ func printStatusText(out statusOutput) {
 		}
 		p.table("  ", "  ", rows)
 	}
+	if out.StaleWarning != "" {
+		p.blank()
+		p.warn("%s", out.StaleWarning)
+	}
 	if out.NATWarning != "" {
 		p.blank()
 		p.warn("%s", out.NATWarning)
@@ -386,6 +394,10 @@ func statusCachePairs(m map[string]interface{}) []pair {
 	}
 	if v, ok := m["path"].(string); ok && v != "" {
 		pairs = append(pairs, kv("path", v))
+	}
+	if v, ok := m["created_at"].(time.Time); ok && !v.IsZero() {
+		pairs = append(pairs, kv("directory created", v.Format(time.RFC3339)))
+		pairs = append(pairs, kv("directory age", time.Since(v).Truncate(time.Second).String()))
 	}
 	if v, ok := m["last_sync"].(time.Time); ok {
 		pairs = append(pairs, kv("last sync", v.Format(time.RFC3339)))

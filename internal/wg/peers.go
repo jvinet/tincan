@@ -33,10 +33,10 @@ type LANEndpointLookup func(pubkey string, staleOK bool) string
 // daemon observes a fresh LastHandshakeTime via wgctrl and flips the peer
 // back to DIRECT (just reshuffling AllowedIPs — no peer add/remove).
 //
-// The relay target is the first non-self node in the directory with a
-// public Endpoint set. If relayed is empty or no relay target exists,
-// every peer in the directory gets its own AllowedIPs and behaves
-// directly.
+// The relay target is chosen by directory.RelayTarget: a node explicitly
+// marked Relay (with a public Endpoint), else the first non-self node with a
+// public Endpoint. If relayed is empty or no relay target exists, every peer
+// in the directory gets its own AllowedIPs and behaves directly.
 //
 // lanLookup, when non-nil, is consulted to obtain a per-peer LAN endpoint
 // learned via the discovery package. LAN endpoints rank above
@@ -57,14 +57,8 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 
 	var relayTargetKey string
 	if len(relayed) > 0 {
-		for i := range dir.Nodes {
-			if dir.Nodes[i].PublicKey == self.PublicKey {
-				continue
-			}
-			if dir.Nodes[i].Endpoint != "" {
-				relayTargetKey = dir.Nodes[i].PublicKey
-				break
-			}
+		if target, ok := directory.RelayTarget(dir, self.PublicKey); ok {
+			relayTargetKey = target.PublicKey
 		}
 	}
 

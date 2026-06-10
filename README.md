@@ -26,7 +26,10 @@ membership changes.
   they just won't auto-update when membership changes (and aren't recipients).
 
 The directory blob carries a monotonic `serial`; clients refuse to apply blobs
-older than the one they already cached, which protects against rollback.
+older than the one they already cached, which protects against rollback. The
+serial guards against an *older* directory, not a drop frozen at the current
+one; set `[sync] max_directory_age` to also warn when the directory's
+`CreatedAt` falls behind (see the configuration reference).
 
 ## Features (MVP)
 
@@ -145,6 +148,12 @@ binds exactly the port peers are told to reach. A mesh of endpoint-less nodes
 cannot form without a relay, and `tincan status` will warn you when it sees that
 situation.
 
+Pass `--relay` (which requires `--endpoint`) to mark the node as the network's
+designated relay: peers route through it when a direct path can't form. Without
+any marked relay, Tincan falls back to the first node that has an endpoint, so
+`--relay` is how you make the choice explicit rather than directory-order
+dependent. See [Relay fallback](#relay-fallback).
+
 Other admin commands:
 
 ```sh
@@ -248,11 +257,19 @@ sudo tincan add-node --name phone --client-type=wireguard \
 where `--bootstrap` applies; the two flag sets are mutually exclusive and
 `add-node --help` lists them in separate sections.)
 
-These are **hub-and-spoke**: the client peers with one node that has a public
-`--endpoint` and routes the whole network CIDR through it (add an endpoint-bearing
-node first, or you'll get an error). It's a point-in-time snapshot — the device
-doesn't run Tincan, so it won't pick up later directory changes (rotated keys,
-moved endpoints, new nodes); re-run to refresh it.
+These are **hub-and-spoke**: the client peers with one node — the network's
+relay (a node marked `--relay`, else the first with a public `--endpoint`) — and
+routes the whole network CIDR through it (add an endpoint-bearing node first, or
+you'll get an error). It's a point-in-time snapshot — the device doesn't run
+Tincan, so it won't pick up later directory changes (rotated keys, moved
+endpoints, new nodes); re-run to refresh it.
+
+Lost the config for a node that's already enrolled? `tincan render-node --name
+phone` regenerates its `wg-quick` config from the current directory. The admin
+never stores node private keys, so the rendered config carries a `PrivateKey`
+placeholder unless you pass `--private-key` (validated against the node's
+published key); the same `--wg-qr` / `--wg-qr-png` / `--wg-config` sinks apply
+(the QR sinks need `--private-key`, since a QR must be directly scannable).
 
 With `--wg-qr` the QR code is the only thing written to stdout, so you can
 redirect it: `... --wg-qr >phone.txt`. That text round-trips only when
@@ -268,9 +285,17 @@ is enrolled.
 sudo tincan status
 ```
 
-`status` prints the local node name, tunnel IP, cache state, daemon liveness,
-dead-drop reachability, and the live WireGuard peer table with last-handshake
-ages. `--json` emits the same data as JSON.
+`status` prints the local node name, tunnel IP, cache state (including the
+directory's age), daemon liveness, dead-drop reachability, and the live
+WireGuard peer table with last-handshake ages. `--json` emits the same data as
+JSON.
+
+`tincan status --network` instead prints a whole-directory roster — every node
+with its tunnel IP, endpoint, role (`relay`/`self`), and handshake age — *as
+seen from this node*. Tincan has no control plane, so it can't poll other nodes:
+the handshake column reflects only this node's own WireGuard sessions (a node it
+doesn't peer with reads `no session`, not "down"). Run it on the admin, which in
+a full mesh talks to everyone, for the most complete picture.
 
 ## Running as a daemon
 
@@ -396,7 +421,9 @@ direct — just by reshuffling `AllowedIPs`, no peer add/remove. There are
 no timed probes, no flapping; recovery happens whenever the kernel
 manages to handshake.
 
-To enable the relay role, the admin node must allow IP forwarding:
+The relay target is the node marked `--relay` (at `init` or `add-node`), or — if
+none is marked — the first node in the directory with a public `Endpoint`. The
+node serving as relay must allow IP forwarding:
 
 ```sh
 sysctl -w net.ipv4.ip_forward=1
@@ -415,11 +442,12 @@ broken.
 
 ### Limitations
 
-- A single relay target is chosen — the first non-self node in the
-  directory with an `Endpoint` set. Multi-relay topologies and explicit
-  relay-role selection aren't supported yet.
-- If the admin/relay node itself is unreachable, relayed peers are
-  unreachable too. The relay isn't a failover for the admin being down.
+- A single relay target is chosen: a node marked `--relay` if one exists,
+  otherwise the first non-self node with an `Endpoint` set. Marking more
+  than one node `--relay` just picks the first such node — multi-relay /
+  failover topologies aren't supported yet.
+- If the relay node itself is unreachable, relayed peers are unreachable
+  too. The relay isn't a failover for the relay being down.
 
 ## LAN peer discovery
 
@@ -561,9 +589,13 @@ type = "s3"
 # ...backend-specific fields...
 
 [sync]
-interval  = "5m"                # daemon poll interval
-state_dir = "/var/lib/tincan"   # houses cache.bin and its sibling state files
-pid_file  = "/run/tincan.pid"
+interval          = "5m"            # daemon poll interval
+state_dir         = "/var/lib/tincan" # houses cache.bin and its sibling state files
+pid_file          = "/run/tincan.pid"
+# max_directory_age = "48h"         # optional: warn (sync/up/status) when the directory's
+                                    # CreatedAt is older than this — catches a frozen or
+                                    # withheld drop. Pair with a cron'd `tincan publish`
+                                    # (which always re-stamps CreatedAt) as a heartbeat.
 
 [observe]                      # admin-only; see Endpoint discovery
 enabled         = true         # default on for admins; set false to stop discovering NAT'd peer endpoints
