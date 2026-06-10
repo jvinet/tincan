@@ -213,7 +213,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 			artifacts = append(artifacts, kv("config", c.WGConfig))
 		}
 		p.pairs(artifacts...)
-		p.hint("Snapshot config: the device won't track later directory changes (rotated keys, moved endpoints, new nodes); re-run to refresh it.")
+		p.hint("Snapshot config: the device won't track later directory changes (rotated keys, moved endpoints, new nodes). Re-running add-node fails (the node exists); to refresh, run `tincan render-node --name %s` to reissue with the same key, or `remove-node` then `add-node` for a fresh key.", c.Name)
 		if c.WGQR {
 			p.blank()
 			if err := emitQRTerminal(os.Stdout, wgConf, useColor(os.Stdout)); err != nil {

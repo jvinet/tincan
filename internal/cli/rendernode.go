@@ -113,7 +113,7 @@ func (c *RenderNodeCmd) Run(ctx context.Context, g *Globals) error {
 		artifacts = append(artifacts, kv("config", c.WGConfig))
 	}
 	p.pairs(artifacts...)
-	p.hint("Snapshot config: the device won't track later directory changes (rotated keys, moved endpoints, new nodes); re-run to refresh it.")
+	p.hint("Snapshot config: the device won't track later directory changes (rotated keys, moved endpoints, new nodes). Re-run `tincan render-node --name %s` after the directory changes to reissue with the same key; use `remove-node` then `add-node` if the node needs a new key.", c.Name)
 	if c.PrivateKey == "" {
 		p.hint("No --private-key given: fill in the PrivateKey placeholder with the node's own key before use.")
 	} else {
