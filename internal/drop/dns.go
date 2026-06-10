@@ -54,10 +54,17 @@ type DNS struct {
 }
 
 func NewDNS(cfg config.DropBackend) (*DNS, error) {
+	// DNS names are case-insensitive and providers normalize them (Linode
+	// lowercases). Lowercase ours too so the provider's exact-match record
+	// lookups in Put don't miss a differently-cased stored name — which would
+	// create a duplicate chunk set on every publish and eventually break
+	// reassembly.
+	zone := strings.ToLower(cfg.Zone)
+	recordName := strings.ToLower(cfg.RecordName)
 	d := &DNS{
-		zone:   cfg.Zone,
-		name:   cfg.RecordName,
-		fqdn:   txtFQDN(cfg.RecordName, cfg.Zone),
+		zone:   zone,
+		name:   recordName,
+		fqdn:   txtFQDN(recordName, zone),
 		lookup: resolverLookup(cfg.Resolver),
 	}
 	if cfg.Provider != "" {

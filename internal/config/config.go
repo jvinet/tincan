@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -320,6 +321,20 @@ func validateDropBackend(b DropBackend) error {
 		if b.URL == "" {
 			return errors.New("url is required for http drops")
 		}
+		u, err := url.Parse(b.URL)
+		if err != nil {
+			return fmt.Errorf("invalid http drop url: %w", err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("http drop url must be http or https, got %q", u.Scheme)
+		}
+		// Basic-auth credentials over cleartext http are broadcast on every
+		// poll. The directory blob is encrypted regardless, but the drop
+		// credentials must not be. (Loopback is exempt — local MinIO/dev.)
+		hasCreds := b.Username != "" || b.Password != "" || u.User != nil
+		if hasCreds && u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+			return errors.New("http drop sends credentials in cleartext; use https (or omit credentials)")
+		}
 		return rejectBackendFields("url/username/password", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
 	case "s3":
 		if b.Endpoint == "" {
@@ -350,6 +365,14 @@ func validateDropBackend(b DropBackend) error {
 	default:
 		return fmt.Errorf("unsupported type %q", b.Type)
 	}
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func rejectBackendFields(allowed string, values ...string) error {

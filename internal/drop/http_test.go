@@ -75,6 +75,25 @@ func TestHTTPDropBasicAuth(t *testing.T) {
 	}
 }
 
+func TestHTTPDropRefusesRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+	}))
+	defer srv.Close()
+	d := NewHTTP(srv.URL, "", "")
+	_, err := d.Get(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "redirect") {
+		t.Fatalf("expected a redirect-refused error, got %v", err)
+	}
+}
+
+func TestHTTPNameRedactsCredentials(t *testing.T) {
+	d := NewHTTP("https://bob:hunter2@example.com/_vpn/dir.bin", "", "")
+	if name := d.Name(); strings.Contains(name, "hunter2") {
+		t.Fatalf("Name() leaked the password: %q", name)
+	}
+}
+
 func TestHTTPDropStatusMapping(t *testing.T) {
 	cases := []struct {
 		status int
@@ -82,7 +101,7 @@ func TestHTTPDropStatusMapping(t *testing.T) {
 	}{
 		{status: http.StatusNotFound, want: ErrNotFound},
 		{status: http.StatusUnauthorized, want: ErrAuth},
-		{status: http.StatusForbidden, want: ErrAuth},
+		{status: http.StatusForbidden, want: ErrForbidden},
 		{status: http.StatusInternalServerError, want: nil},
 	}
 	for _, tc := range cases {

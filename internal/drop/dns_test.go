@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/dnsprovider"
 )
 
@@ -215,6 +216,22 @@ func TestDNSPutReconcileShrinks(t *testing.T) {
 	}
 	if !bytes.Equal(got, small) {
 		t.Fatal("shrink reconcile produced wrong directory")
+	}
+}
+
+// DNS names are case-insensitive and providers normalize them; NewDNS must
+// lowercase the zone and record name so provider record lookups in Put don't
+// miss a differently-cased stored name (which would duplicate the chunk set).
+func TestNewDNSLowercasesNames(t *testing.T) {
+	d, err := NewDNS(config.DropBackend{Type: "dns", Zone: "Example.COM", RecordName: "_Tincan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.zone != "example.com" {
+		t.Fatalf("zone = %q, want lowercased", d.zone)
+	}
+	if d.name != "_tincan" {
+		t.Fatalf("name = %q, want lowercased", d.name)
 	}
 }
 

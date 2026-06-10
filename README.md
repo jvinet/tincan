@@ -492,6 +492,12 @@ url = "https://example.com/_vpn/directory.bin"
 # password = "letmein"
 ```
 
+The directory blob is encrypted regardless, but `username`/`password` (or
+credentials embedded in the URL) are rejected over a cleartext `http://` URL
+unless the host is loopback — use `https` so the drop credentials aren't
+broadcast on every poll. A dead-drop is fetched directly; tincan refuses to
+follow HTTP redirects.
+
 HTTP is download-only — admins cannot `publish` to an HTTP drop. Combine a
 file `[drop.admin]` (written into a web root) with an HTTP `[drop.client]` so
 clients fetch through a CDN or static host.

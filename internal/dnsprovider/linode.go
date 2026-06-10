@@ -81,8 +81,9 @@ func (l *linode) ListTXT(ctx context.Context, zone, name string) ([]TXTRecord, e
 		}
 		for _, r := range resp.Data {
 			// Belt-and-suspenders: filter client-side too, in case the
-			// provider ignores X-Filter.
-			if r.Type == "TXT" && r.Name == name {
+			// provider ignores X-Filter. DNS names are case-insensitive, so
+			// match without regard to case (the provider may have normalized).
+			if r.Type == "TXT" && strings.EqualFold(r.Name, name) {
 				out = append(out, TXTRecord{ID: strconv.FormatInt(r.ID, 10), Value: r.Target})
 			}
 		}
@@ -185,7 +186,10 @@ func (l *linode) do(ctx context.Context, method, url, xfilter string, body any) 
 		return nil, fmt.Errorf("linode API request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read linode response: %w", err)
+	}
 	if err := statusError(resp.StatusCode, data); err != nil {
 		return nil, err
 	}

@@ -233,6 +233,9 @@ func TestValidateRejectsBadDropFields(t *testing.T) {
 		{name: "file mixed fields", backend: DropBackend{Type: "file", Path: "/tmp/directory.bin", Endpoint: "s3.amazonaws.com"}},
 		{name: "http missing URL", backend: DropBackend{Type: "http"}},
 		{name: "http mixed fields", backend: DropBackend{Type: "http", URL: "https://example.com/directory.bin", Bucket: "bucket"}},
+		{name: "http bad scheme", backend: DropBackend{Type: "http", URL: "ftp://example.com/directory.bin"}},
+		{name: "http cleartext basic auth", backend: DropBackend{Type: "http", URL: "http://example.com/directory.bin", Username: "bob", Password: "secret"}},
+		{name: "http cleartext userinfo", backend: DropBackend{Type: "http", URL: "http://bob:secret@example.com/directory.bin"}},
 		{name: "s3 missing bucket", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com"}},
 		{name: "s3 partial credentials", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Bucket: "bucket", AccessKey: "access"}},
 		{name: "dns missing zone", backend: DropBackend{Type: "dns", Provider: "linode", APIToken: "tok"}},
@@ -249,6 +252,17 @@ func TestValidateRejectsBadDropFields(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+// Credentials over cleartext http are allowed only against a loopback host
+// (local MinIO / dev), where nothing leaves the machine.
+func TestValidateAllowsCleartextAuthOnLoopback(t *testing.T) {
+	cfg := validConfig(t)
+	backend := DropBackend{Type: "http", URL: "http://127.0.0.1:9000/directory.bin", Username: "bob", Password: "secret"}
+	cfg.Drop = DropConfig{Admin: backend, Client: backend}
+	if err := cfg.Validate(false); err != nil {
+		t.Fatalf("loopback cleartext auth should be allowed: %v", err)
 	}
 }
 

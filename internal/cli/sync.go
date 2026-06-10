@@ -46,13 +46,29 @@ func syncSource(res syncResult) string {
 	return "drop"
 }
 
-// reportSync prints the sync outcome and, when the drop was unreachable and a
-// stale cached directory is being served instead, warns with the underlying
-// drop error. sync previously swallowed that error behind a success message.
+// reportSync prints the sync outcome and, when the drop couldn't be read and a
+// stale cached directory is being served instead, warns with an actionable
+// reason. The backends preserve distinct sentinels (not-found / auth /
+// forbidden / transient); collapsing them all into "unreachable" hides
+// permanent misconfigurations behind what looks like a passing network blip.
 func (p *printer) reportSync(res syncResult) {
 	p.headline("synced from %s (serial: %d)", syncSource(res), res.Serial)
 	if res.FromCache && res.StaleErr != nil {
-		p.warn("drop unreachable (%v); serving cached serial %d", res.StaleErr, res.Serial)
+		p.warn("%s; serving cached serial %d", dropErrorAdvice(res.StaleErr), res.Serial)
+	}
+}
+
+// dropErrorAdvice turns a drop fetch error into an actionable one-liner.
+func dropErrorAdvice(err error) string {
+	switch {
+	case errors.Is(err, drop.ErrNotFound):
+		return "no directory at the drop (has the admin published yet?)"
+	case errors.Is(err, drop.ErrAuth):
+		return "drop rejected the credentials (check [drop.client] access keys)"
+	case errors.Is(err, drop.ErrForbidden):
+		return "drop object is not readable (check the bucket policy / object ACL, or provide read-only credentials)"
+	default:
+		return fmt.Sprintf("drop unreachable (%v)", err)
 	}
 }
 
