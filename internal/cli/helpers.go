@@ -92,7 +92,7 @@ func reconcilePublishSerial(source *directory.Directory, remote directory.Direct
 }
 
 func publishDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir directory.Directory, writeSource bool) error {
-	blob, err := directory.Seal(dir, cfg.Directory.NetworkIdentity, cfg.Directory.PublisherKey)
+	blob, err := directory.Seal(dir, cfg.Directory.PublisherKey)
 	if err != nil {
 		return err
 	}

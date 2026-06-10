@@ -90,10 +90,11 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 		CreatedAt:     directory.Stamp(),
 		NetworkCIDR:   c.CIDR,
 		Nodes: []directory.Node{{
-			Name:      c.Name,
-			PublicKey: wgPub,
-			TunnelIP:  tunnelIP,
-			Endpoint:  c.Endpoint,
+			Name:         c.Name,
+			PublicKey:    wgPub,
+			TunnelIP:     tunnelIP,
+			AgeRecipient: networkRecipient,
+			Endpoint:     c.Endpoint,
 		}},
 	}
 	if err := cache.WriteSource(stateDir, dir); err != nil {
@@ -126,7 +127,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 		secret("private key", wgPriv),
 	)
 	p.blank()
-	p.section("Network identity (age)")
+	p.section("Node identity (age)")
 	p.pairs(
 		secret("identity", networkIdentity),
 		kv("recipient", networkRecipient),

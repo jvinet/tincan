@@ -41,6 +41,9 @@ type WireguardConfig struct {
 }
 
 type DirectoryConfig struct {
+	// NetworkIdentity is this node's own age secret (AGE-SECRET-KEY-1…), unique
+	// per node — it decrypts directories sealed to the node's recipient. The
+	// field name is historical (it was a single shared secret before schema v2).
 	NetworkIdentity string `toml:"network_identity"`
 	PublisherPubKey string `toml:"publisher_pubkey"`
 	PublisherKey    string `toml:"publisher_key,omitempty"`

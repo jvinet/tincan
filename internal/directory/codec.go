@@ -66,6 +66,7 @@ type wireNode struct {
 	Name             string    `msgpack:"n"`
 	PublicKey        []byte    `msgpack:"pk"`
 	TunnelIP         []byte    `msgpack:"ip"`
+	AgeRecipient     string    `msgpack:"age,omitempty"`
 	Endpoint         string    `msgpack:"ep,omitempty"`
 	ObservedEndpoint string    `msgpack:"oep,omitempty"`
 	ObservedAt       time.Time `msgpack:"oat,omitempty"`
@@ -105,6 +106,7 @@ func (n Node) toWire() (wireNode, error) {
 		Name:             n.Name,
 		PublicKey:        pk,
 		TunnelIP:         ip4[:],
+		AgeRecipient:     n.AgeRecipient,
 		Endpoint:         n.Endpoint,
 		ObservedEndpoint: n.ObservedEndpoint,
 		ObservedAt:       n.ObservedAt,
@@ -131,6 +133,7 @@ func (n *Node) fromWire(w wireNode) error {
 	n.Name = w.Name
 	n.PublicKey = pk
 	n.TunnelIP = netip.AddrFrom4(ip4).String()
+	n.AgeRecipient = w.AgeRecipient
 	n.Endpoint = w.Endpoint
 	n.ObservedEndpoint = w.ObservedEndpoint
 	n.ObservedAt = w.ObservedAt
@@ -145,14 +148,22 @@ func (n *Node) fromWire(w wireNode) error {
 	return nil
 }
 
-func Seal(dir Directory, networkIdentity string, publisherPrivateKey string) ([]byte, error) {
+// Seal signs the directory with the publisher key and encrypts it to the age
+// recipients of every member that has one. Each node decrypts with its own
+// identity; a node dropped from the directory is no longer a recipient of the
+// next sealed blob, so removal-then-publish revokes its access. At least one
+// member must carry an AgeRecipient.
+func Seal(dir Directory, publisherPrivateKey string) ([]byte, error) {
 	payload, err := MarshalPlain(dir)
 	if err != nil {
 		return nil, err
 	}
-	identity, err := keys.ParseAgeIdentity(networkIdentity)
+	recipients, err := recipientsOf(dir)
 	if err != nil {
 		return nil, err
+	}
+	if len(recipients) == 0 {
+		return nil, errors.New("directory has no age recipients to seal to")
 	}
 	publisherKey, err := keys.DecodeEd25519Private(publisherPrivateKey)
 	if err != nil {
@@ -167,7 +178,7 @@ func Seal(dir Directory, networkIdentity string, publisherPrivateKey string) ([]
 		return nil, fmt.Errorf("encode directory envelope: %w", err)
 	}
 	var encrypted bytes.Buffer
-	w, err := age.Encrypt(&encrypted, identity.Recipient())
+	w, err := age.Encrypt(&encrypted, recipients...)
 	if err != nil {
 		return nil, fmt.Errorf("start age encryption: %w", err)
 	}
@@ -179,6 +190,23 @@ func Seal(dir Directory, networkIdentity string, publisherPrivateKey string) ([]
 		return nil, fmt.Errorf("finish age encryption: %w", err)
 	}
 	return encrypted.Bytes(), nil
+}
+
+// recipientsOf parses every node's AgeRecipient into an age recipient,
+// skipping members without one (plain-WireGuard nodes).
+func recipientsOf(dir Directory) ([]age.Recipient, error) {
+	var recipients []age.Recipient
+	for _, n := range dir.Nodes {
+		if n.AgeRecipient == "" {
+			continue
+		}
+		r, err := keys.ParseAgeRecipient(n.AgeRecipient)
+		if err != nil {
+			return nil, fmt.Errorf("node %q: %w", n.Name, err)
+		}
+		recipients = append(recipients, r)
+	}
+	return recipients, nil
 }
 
 // MaxBlobSize bounds a sealed directory blob. The drop is untrusted: every
@@ -212,11 +240,11 @@ func Open(blob []byte, networkIdentity string, publisherPublicKey string) (Direc
 	if len(plaintext) > MaxBlobSize {
 		return Directory{}, nil, fmt.Errorf("decrypted directory exceeds %d bytes", MaxBlobSize)
 	}
-	// The envelope is decoded before signature verification, on plaintext
-	// that anyone holding the shared age identity can produce. Unknown
-	// fields would be skipped via unbounded recursion (a stack-exhaustion
-	// surface); reject them instead — schema evolution belongs inside the
-	// signed payload, not the envelope.
+	// The envelope is decoded before signature verification, on plaintext any
+	// current member (a recipient of this blob) can produce. Unknown fields
+	// would be skipped via unbounded recursion (a stack-exhaustion surface);
+	// reject them instead — schema evolution belongs inside the signed
+	// payload, not the envelope.
 	dec := msgpack.NewDecoder(bytes.NewReader(plaintext))
 	dec.DisallowUnknownFields(true)
 	var envelope Envelope
@@ -279,6 +307,11 @@ func Validate(dir Directory) error {
 		}
 		if err := validateEndpoint(node.ObservedEndpoint); err != nil {
 			return fmt.Errorf("node %q observed endpoint: %w", node.Name, err)
+		}
+		if node.AgeRecipient != "" {
+			if _, err := keys.ParseAgeRecipient(node.AgeRecipient); err != nil {
+				return fmt.Errorf("node %q: %w", node.Name, err)
+			}
 		}
 	}
 	return nil

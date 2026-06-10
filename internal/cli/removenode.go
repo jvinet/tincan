@@ -55,9 +55,10 @@ func (c *RemoveNodeCmd) Run(ctx context.Context, g *Globals) error {
 	p.pairs(kv("freed IP", node.TunnelIP))
 	p.blank()
 	if c.NoPublish {
-		p.hint("Changes saved locally; run `tincan publish` to upload to the drop")
+		p.hint("Changes saved locally; run `tincan publish` to revoke and upload to the drop")
 	} else {
 		p.hint("Removed peers disappear from other nodes after their next sync")
+		p.hint("This publish re-encrypts to the remaining members only: %q can no longer decrypt the directory", c.Name)
 	}
 	return nil
 }

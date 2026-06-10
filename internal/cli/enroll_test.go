@@ -8,6 +8,7 @@ import (
 	"github.com/jvinet/tincan/internal/bootstrap"
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
+	"github.com/jvinet/tincan/internal/keys"
 )
 
 // enroll runs the admin's `add-node` and the client's `join` against a file
@@ -96,6 +97,22 @@ func TestEnrollSeedsSerialFloor(t *testing.T) {
 	}
 	if serial != bs.Serial {
 		t.Fatalf("seeded serial=%d, want %d", serial, bs.Serial)
+	}
+}
+
+// add-node generates the node's age keypair, delivers the identity in the
+// bootstrap, and join writes it as the node's own network_identity. Without
+// this the node has no key to decrypt the per-node-encrypted directory.
+func TestEnrollWiresAgeIdentity(t *testing.T) {
+	bs, cfg := enroll(t, "")
+	if bs.Node == nil || bs.Node.AgeIdentity == "" {
+		t.Fatal("bootstrap did not carry an age identity")
+	}
+	if cfg.Directory.NetworkIdentity != bs.Node.AgeIdentity {
+		t.Fatalf("joined network_identity %q != bootstrap age identity %q", cfg.Directory.NetworkIdentity, bs.Node.AgeIdentity)
+	}
+	if _, err := keys.AgeRecipientFromIdentity(cfg.Directory.NetworkIdentity); err != nil {
+		t.Fatalf("joined identity is not a valid age identity: %v", err)
 	}
 }
 

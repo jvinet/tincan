@@ -12,7 +12,10 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-func sampleDirectory(t *testing.T) Directory {
+// sampleDirectory returns a two-node directory and alice's age identity (the
+// secret that decrypts a blob sealed to this directory). Both members carry a
+// real age recipient so Seal has someone to encrypt to.
+func sampleDirectory(t *testing.T) (Directory, string) {
 	t.Helper()
 	_, alicePub, err := keys.GenerateWGKeypair()
 	if err != nil {
@@ -22,16 +25,25 @@ func sampleDirectory(t *testing.T) Directory {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Directory{
+	aliceID, aliceRcpt, err := keys.GenerateAgeIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, bobRcpt, err := keys.GenerateAgeIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := Directory{
 		SchemaVersion: SchemaVersion,
 		Serial:        7,
 		CreatedAt:     time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC),
 		NetworkCIDR:   "10.42.0.0/24",
 		Nodes: []Node{
-			{Name: "alice", PublicKey: alicePub, TunnelIP: "10.42.0.1", Endpoint: "alice.example.com:51820"},
-			{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2", ObservedEndpoint: "203.0.113.7:41234", ObservedAt: time.Date(2026, 5, 25, 9, 59, 0, 0, time.UTC)},
+			{Name: "alice", PublicKey: alicePub, TunnelIP: "10.42.0.1", AgeRecipient: aliceRcpt, Endpoint: "alice.example.com:51820"},
+			{Name: "bob", PublicKey: bobPub, TunnelIP: "10.42.0.2", AgeRecipient: bobRcpt, ObservedEndpoint: "203.0.113.7:41234", ObservedAt: time.Date(2026, 5, 25, 9, 59, 0, 0, time.UTC)},
 		},
 	}
+	return dir, aliceID
 }
 
 func cloneDirectory(dir Directory) Directory {
@@ -41,17 +53,13 @@ func cloneDirectory(dir Directory) Directory {
 }
 
 func TestSealOpenRoundTrip(t *testing.T) {
-	identity, _, err := keys.GenerateAgeIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
 	publisherPub, publisherPriv, err := keys.GenerateEd25519Keypair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := sampleDirectory(t)
+	dir, identity := sampleDirectory(t)
 
-	blob, err := Seal(dir, identity, publisherPriv)
+	blob, err := Seal(dir, publisherPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +89,87 @@ func TestSealOpenRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsWrongIdentity(t *testing.T) {
-	identity, _, err := keys.GenerateAgeIdentity()
+// Every member's identity must decrypt the same sealed blob, and a non-member
+// identity must not — the foundation of per-node revocation.
+func TestSealEncryptsToEveryRecipient(t *testing.T) {
+	publisherPub, publisherPriv, err := keys.GenerateEd25519Keypair()
 	if err != nil {
 		t.Fatal(err)
 	}
+	aliceID, aliceRcpt, _ := keys.GenerateAgeIdentity()
+	bobID, bobRcpt, _ := keys.GenerateAgeIdentity()
+	_, aPub, _ := keys.GenerateWGKeypair()
+	_, bPub, _ := keys.GenerateWGKeypair()
+	dir := Directory{
+		SchemaVersion: SchemaVersion, Serial: 3, CreatedAt: Stamp(), NetworkCIDR: "10.42.0.0/24",
+		Nodes: []Node{
+			{Name: "alice", PublicKey: aPub, TunnelIP: "10.42.0.1", AgeRecipient: aliceRcpt},
+			{Name: "bob", PublicKey: bPub, TunnelIP: "10.42.0.2", AgeRecipient: bobRcpt},
+		},
+	}
+	blob, err := Seal(dir, publisherPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{aliceID, bobID} {
+		if _, _, err := Open(blob, id, publisherPub); err != nil {
+			t.Fatalf("a member could not open the directory: %v", err)
+		}
+	}
+	stranger, _, _ := keys.GenerateAgeIdentity()
+	if _, _, err := Open(blob, stranger, publisherPub); err == nil {
+		t.Fatal("a non-recipient identity opened the directory")
+	}
+}
+
+// Removing a node and re-sealing revokes it: the removed node's identity can
+// still open the old blob but not the new one, while a retained node opens
+// both. This is the whole point of per-node recipients.
+func TestRemovalRevokesDecryption(t *testing.T) {
+	publisherPub, publisherPriv, err := keys.GenerateEd25519Keypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliceID, aliceRcpt, _ := keys.GenerateAgeIdentity()
+	bobID, bobRcpt, _ := keys.GenerateAgeIdentity()
+	_, aPub, _ := keys.GenerateWGKeypair()
+	_, bPub, _ := keys.GenerateWGKeypair()
+	dir := Directory{
+		SchemaVersion: SchemaVersion, Serial: 3, CreatedAt: Stamp(), NetworkCIDR: "10.42.0.0/24",
+		Nodes: []Node{
+			{Name: "alice", PublicKey: aPub, TunnelIP: "10.42.0.1", AgeRecipient: aliceRcpt},
+			{Name: "bob", PublicKey: bPub, TunnelIP: "10.42.0.2", AgeRecipient: bobRcpt},
+		},
+	}
+	before, err := Seal(dir, publisherPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drop bob and re-seal to the remaining recipients.
+	revoked := cloneDirectory(dir)
+	revoked.Nodes = revoked.Nodes[:1]
+	revoked.Serial++
+	after, err := Seal(revoked, publisherPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bob can still open the blob he was a recipient of, but not the new one.
+	if _, _, err := Open(before, bobID, publisherPub); err != nil {
+		t.Fatalf("bob could not open the pre-removal blob he was a recipient of: %v", err)
+	}
+	if _, _, err := Open(after, bobID, publisherPub); err == nil {
+		t.Fatal("revoked node still decrypted the post-removal directory")
+	}
+	// Alice (retained) opens both.
+	if _, _, err := Open(before, aliceID, publisherPub); err != nil {
+		t.Fatalf("alice could not open the pre-removal blob: %v", err)
+	}
+	if _, _, err := Open(after, aliceID, publisherPub); err != nil {
+		t.Fatalf("alice could not open the post-removal blob: %v", err)
+	}
+}
+
+func TestOpenRejectsWrongIdentity(t *testing.T) {
 	wrongIdentity, _, err := keys.GenerateAgeIdentity()
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +178,8 @@ func TestOpenRejectsWrongIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, err := Seal(sampleDirectory(t), identity, publisherPriv)
+	dir, _ := sampleDirectory(t)
+	blob, err := Seal(dir, publisherPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,10 +190,6 @@ func TestOpenRejectsWrongIdentity(t *testing.T) {
 }
 
 func TestOpenRejectsWrongPublisher(t *testing.T) {
-	identity, _, err := keys.GenerateAgeIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
 	_, publisherPriv, err := keys.GenerateEd25519Keypair()
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +198,8 @@ func TestOpenRejectsWrongPublisher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, err := Seal(sampleDirectory(t), identity, publisherPriv)
+	dir, identity := sampleDirectory(t)
+	blob, err := Seal(dir, publisherPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,15 +211,12 @@ func TestOpenRejectsWrongPublisher(t *testing.T) {
 }
 
 func TestOpenRejectsTamperedBlob(t *testing.T) {
-	identity, _, err := keys.GenerateAgeIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
 	publisherPub, publisherPriv, err := keys.GenerateEd25519Keypair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, err := Seal(sampleDirectory(t), identity, publisherPriv)
+	dir, identity := sampleDirectory(t)
+	blob, err := Seal(dir, publisherPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +256,8 @@ func TestOpenRejectsUnknownEnvelopeFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := MarshalPlain(sampleDirectory(t))
+	dir, _ := sampleDirectory(t)
+	payload, err := MarshalPlain(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,18 +297,14 @@ func TestOpenRejectsUnknownEnvelopeFields(t *testing.T) {
 }
 
 func TestSealRejectsInvalidDirectory(t *testing.T) {
-	identity, _, err := keys.GenerateAgeIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
 	_, publisherPriv, err := keys.GenerateEd25519Keypair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := sampleDirectory(t)
+	dir, _ := sampleDirectory(t)
 	dir.NetworkCIDR = "not-a-cidr"
 
-	if _, err := Seal(dir, identity, publisherPriv); err == nil {
+	if _, err := Seal(dir, publisherPriv); err == nil {
 		t.Fatal("expected invalid directory to fail sealing")
 	}
 }
@@ -244,7 +320,7 @@ func TestStampIsSecondPrecisionUTC(t *testing.T) {
 }
 
 func TestMarshalPlainDefaultsToSecondPrecision(t *testing.T) {
-	dir := sampleDirectory(t)
+	dir, _ := sampleDirectory(t)
 	dir.CreatedAt = time.Time{} // force the IsZero default-stamp path
 	blob, err := MarshalPlain(dir)
 	if err != nil {
@@ -263,7 +339,7 @@ func TestMarshalPlainDefaultsToSecondPrecision(t *testing.T) {
 }
 
 func TestMarshalPlainTimestampIsCompact(t *testing.T) {
-	dir := sampleDirectory(t) // CreatedAt is already whole-second
+	dir, _ := sampleDirectory(t) // CreatedAt is already whole-second
 	whole, err := MarshalPlain(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -316,7 +392,7 @@ func TestNodeWireRoundTrip(t *testing.T) {
 }
 
 func TestNodeEncodedAsRawBytes(t *testing.T) {
-	dir := sampleDirectory(t)
+	dir, _ := sampleDirectory(t)
 	payload, err := MarshalPlain(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -362,7 +438,7 @@ func TestFromWireRejectsMalformed(t *testing.T) {
 }
 
 func TestValidateRejectsBadDirectories(t *testing.T) {
-	valid := sampleDirectory(t)
+	valid, _ := sampleDirectory(t)
 	cases := []struct {
 		name   string
 		mutate func(*Directory)
@@ -381,6 +457,7 @@ func TestValidateRejectsBadDirectories(t *testing.T) {
 		{name: "endpoint bad port", mutate: func(d *Directory) { d.Nodes[0].Endpoint = "host.example.com:99999" }},
 		{name: "endpoint newline injection", mutate: func(d *Directory) { d.Nodes[0].Endpoint = "host:51820\nPostUp = evil" }},
 		{name: "observed endpoint malformed", mutate: func(d *Directory) { d.Nodes[1].ObservedEndpoint = "garbage" }},
+		{name: "bad age recipient", mutate: func(d *Directory) { d.Nodes[0].AgeRecipient = "age1notreal" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

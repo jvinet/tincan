@@ -71,7 +71,7 @@ func TestFetchSyncDirectoryRejectsRollback(t *testing.T) {
 	}
 	stale := cached
 	stale.Serial = 4
-	blob, err := directory.Seal(stale, cfg.Directory.NetworkIdentity, cfg.Directory.PublisherKey)
+	blob, err := directory.Seal(stale, cfg.Directory.PublisherKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestFetchSyncDirectoryRejectsRollback(t *testing.T) {
 // high-water mark, making an attacker-served rollback durable.
 func TestFetchSyncDirectoryFailsClosedOnCorruptSerial(t *testing.T) {
 	cfg, dir := testFlowConfigAndDirectory(t, 5)
-	blob, err := directory.Seal(dir, cfg.Directory.NetworkIdentity, cfg.Directory.PublisherKey)
+	blob, err := directory.Seal(dir, cfg.Directory.PublisherKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func testFlowConfigAndDirectory(t *testing.T, serial uint64) (*config.Config, di
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, _, err := keys.GenerateAgeIdentity()
+	identity, recipient, err := keys.GenerateAgeIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,9 +163,10 @@ func testFlowConfigAndDirectory(t *testing.T, serial uint64) (*config.Config, di
 		CreatedAt:     time.Now().UTC(),
 		NetworkCIDR:   "10.42.0.0/24",
 		Nodes: []directory.Node{{
-			Name:      "alice",
-			PublicKey: wgPub,
-			TunnelIP:  "10.42.0.1",
+			Name:         "alice",
+			PublicKey:    wgPub,
+			TunnelIP:     "10.42.0.1",
+			AgeRecipient: recipient,
 		}},
 	}
 	return &cfg, dir

@@ -10,7 +10,10 @@ import (
 	"github.com/jvinet/tincan/internal/config"
 )
 
-const SchemaVersion = 1
+// SchemaVersion 2 dropped the shared network identity (now per-node) and added
+// the node's age identity to the node block. v1 bootstraps carried the
+// defunct shared secret and are rejected.
+const SchemaVersion = 2
 
 type Bootstrap struct {
 	SchemaVersion int       `json:"schema_version"`
@@ -24,7 +27,6 @@ type Bootstrap struct {
 }
 
 type Directory struct {
-	NetworkIdentity string `json:"network_identity"`
 	PublisherPubKey string `json:"publisher_pubkey"`
 }
 
@@ -38,13 +40,16 @@ type Node struct {
 	ListenPort int    `json:"listen_port,omitempty"`
 	PublicKey  string `json:"public_key"`
 	PrivateKey string `json:"private_key,omitempty"`
+	// AgeIdentity is this node's age secret (AGE-SECRET-KEY-1…). It decrypts
+	// the directory and is unique per node, so it is as sensitive as the
+	// WireGuard private key. Present when the admin generated the node's keys.
+	AgeIdentity string `json:"age_identity,omitempty"`
 }
 
 func Network(cfg *config.Config, serial uint64) Bootstrap {
 	return Bootstrap{
 		SchemaVersion: SchemaVersion,
 		Directory: Directory{
-			NetworkIdentity: cfg.Directory.NetworkIdentity,
 			PublisherPubKey: cfg.Directory.PublisherPubKey,
 		},
 		Serial: serial,

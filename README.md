@@ -14,12 +14,16 @@ membership changes.
 
 - An **admin node** holds the publisher signing key and writes a signed,
   age-encrypted directory blob to a shared dead-drop.
-- Every **client node** holds the shared age identity and the publisher's public
-  key. It pulls the blob from the dead-drop, verifies the signature, decrypts
-  it, and reconciles its local WireGuard interface against the resulting peer
-  list.
+- Every node has its **own age keypair**. The directory is encrypted to the
+  recipients of all current members, so each node decrypts the blob with its
+  own identity. A client pulls the blob, verifies the publisher's signature,
+  decrypts it, and reconciles its WireGuard interface against the peer list.
+- Membership is **cryptographically revocable without a control plane**:
+  `remove-node` drops a node's recipient, and the next `publish` re-encrypts to
+  the remaining members only. The removed node keeps its key but can no longer
+  decrypt new directories — no shared secret to rotate across the fleet.
 - Nodes that don't run Tincan can still participate as plain WireGuard peers —
-  they just won't auto-update when membership changes.
+  they just won't auto-update when membership changes (and aren't recipients).
 
 The directory blob carries a monotonic `serial`; clients refuse to apply blobs
 older than the one they already cached, which protects against rollback.
@@ -82,7 +86,8 @@ sudo tincan init \
 `0600`):
 
 - a WireGuard keypair for this node
-- a shared age identity (used by every node to decrypt the directory)
+- this node's own age keypair (its identity decrypts the directory; its
+  recipient is what the directory is encrypted to)
 - a publisher Ed25519 keypair (the private half is what makes this node an
   admin)
 - a local "working directory" containing just this one node
@@ -121,16 +126,17 @@ sudo tincan add-node --name bob --endpoint 198.51.100.7:51820 \
   --bootstrap /tmp/bob.json
 ```
 
-If you don't pass `--pubkey`, Tincan generates a WireGuard keypair for the new
-node. Without `--bootstrap`, the **private key** is printed to stdout once for
-you to transmit manually; with `--bootstrap`, it's written into a JSON
-**node bootstrap file** that contains everything the new node needs to come up.
-Transmit that file over a secure channel and delete it after the client has
-joined.
+If you don't pass `--pub-key`, Tincan generates both a WireGuard keypair and an
+age keypair for the new node. Without `--bootstrap`, the **private key** and
+**age identity** are printed to stdout once for you to transmit manually; with
+`--bootstrap`, they're written into a JSON **node bootstrap file** that contains
+everything the new node needs to come up. Transmit that file over a secure
+channel and delete it after the client has joined.
 
-If the operator has already generated their own keys locally, pass `--pubkey`
-instead so the secret never leaves their machine. The bootstrap file is still
-useful in that case — it just won't contain a private key.
+If the operator has already generated their own keys locally (via
+`tincan join --generate-key`), pass `--pub-key` **and** `--age-recipient` so
+neither secret ever leaves their machine. The bootstrap file is still useful in
+that case — it just won't contain the secrets.
 
 `--endpoint` is optional. Omit it for nodes that sit behind NAT and dial out;
 include `host:port` for nodes that are publicly reachable. The port you publish
@@ -151,6 +157,11 @@ sudo tincan publish           # re-publish the working directory
 the upload (changes are saved to the working directory). `publish` is for
 re-issuing after deferred edits or to recover from a partial upload.
 
+`remove-node` is also how you **revoke** a node: the publish that follows
+re-encrypts the directory to the remaining members' recipients only, so the
+removed node can no longer decrypt new directories. It keeps whatever blob it
+already cached but is locked out of every future one — no fleet-wide rekey.
+
 Before uploading, `publish` fetches the directory currently at the drop so it
 never reuses an already-published serial. If that fetch fails (an empty drop
 on first publish is fine), it refuses to proceed — pass `--force` to publish
@@ -166,34 +177,37 @@ sudo tincan join --bootstrap /tmp/bob.json
 sudo tincan up
 ```
 
-`join --bootstrap` populates `[directory]`, `[drop.client]`, the node's
-`listen_port` (when the admin published an endpoint for it), and (if the admin
-generated it) the WireGuard keypair from the bootstrap. Nothing else to edit.
-The bootstrap also carries the directory serial current at enrollment, which
-`join` seeds as the node's rollback floor — even the first sync refuses a
-directory older than the bootstrap.
+`join --bootstrap` populates `[directory]` (the node's own `network_identity`
+and the `publisher_pubkey`), `[drop.client]`, the node's `listen_port` (when the
+admin published an endpoint for it), and (if the admin generated it) the
+WireGuard keypair from the bootstrap. Nothing else to edit. The bootstrap also
+carries the directory serial current at enrollment, which `join` seeds as the
+node's rollback floor — even the first sync refuses a directory older than the
+bootstrap.
 
 If you don't have a bootstrap file, do it manually:
 
 ```sh
-sudo tincan join --name bob --drop-type s3
+sudo tincan join --name bob --drop-type s3 --generate-key
 ```
 
-`join` writes a skeleton `/etc/tincan/config.toml`. By default it prompts for
-the WireGuard private key on stdin; alternatively:
-
-- `--private-key-file /path/to/key` — read it from a file
-- `--generate-key` — generate a fresh keypair locally and print the public key
-  so the admin can `add-node --pubkey ...`
+`join` writes a skeleton `/etc/tincan/config.toml`. `--generate-key` generates
+this node's WireGuard **and** age keypairs locally and prints the WireGuard
+public key and the age recipient, so the admin can run
+`add-node --pub-key <key> --age-recipient <recipient>` — neither secret ever
+leaves the node. Without `--generate-key`, `join` prompts for the WireGuard
+private key on stdin (no echo); alternatively `--private-key-file /path/to/key`
+reads it from a file, and you fill `[directory].network_identity` (this node's
+age secret) by hand.
 
 Pass `--force` to overwrite an existing config, or `--state-dir /path` to use a
 non-default state directory. As with `init`, `--full-config` writes every
 applicable section and field at its default instead of the minimal set.
 
-Edit the config and fill in:
+If you joined without a node bootstrap, edit the config and fill in:
 
-- `[directory]` — `network_identity` (the age secret key) and
-  `publisher_pubkey`, both from the admin's `init` output
+- `[directory]` — `network_identity` (this node's age secret) and
+  `publisher_pubkey` (from the admin's `init` output)
 - `[drop.client]` — the same backend coordinates the admin uses (read-only
   credentials are fine for clients)
 
@@ -534,7 +548,7 @@ mtu         = 1420             # default 1420
 keepalive   = "25s"            # optional persistent-keepalive for peers
 
 [directory]
-network_identity = "AGE-SECRET-KEY-1..."   # shared age secret (every node)
+network_identity = "AGE-SECRET-KEY-1..."   # this node's own age secret (unique per node)
 publisher_pubkey = "..."                   # admin's Ed25519 public key (every node)
 publisher_key    = "..."                   # admin's Ed25519 private key (admins only)
 

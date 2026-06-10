@@ -40,7 +40,6 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 	var (
 		bs              *bootstrap.Bootstrap
 		dropConfig      config.DropConfig
-		networkIdentity string
 		publisherPubKey string
 		nodeName        = c.Name
 	)
@@ -51,7 +50,6 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 		}
 		bs = &loaded
 		dropConfig = config.DropConfig{Client: bs.Drop}
-		networkIdentity = bs.Directory.NetworkIdentity
 		publisherPubKey = bs.Directory.PublisherPubKey
 		if bs.Node != nil && nodeName == "" {
 			nodeName = bs.Node.Name
@@ -66,7 +64,7 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 		return errors.New("--name is required when the bootstrap does not include node info")
 	}
 
-	privateKey, publicKey, err := c.resolveKeys(bs)
+	keyset, err := c.resolveKeys(bs)
 	if err != nil {
 		return err
 	}
@@ -74,11 +72,11 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 	cfg := config.Config{
 		Wireguard: config.WireguardConfig{
 			Name:       nodeName,
-			PublicKey:  publicKey,
-			PrivateKey: privateKey,
+			PublicKey:  keyset.wgPublic,
+			PrivateKey: keyset.wgPrivate,
 		},
 		Directory: config.DirectoryConfig{
-			NetworkIdentity: networkIdentity,
+			NetworkIdentity: keyset.ageIdentity,
 			PublisherPubKey: publisherPubKey,
 		},
 		Drop: dropConfig,
@@ -120,7 +118,12 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 	p.pairs(kv("config", g.Config))
 	p.blank()
 	p.section("WireGuard")
-	p.pairs(kv("public key", publicKey))
+	p.pairs(kv("public key", keyset.wgPublic))
+	if c.GenerateKey {
+		p.blank()
+		p.section("age recipient")
+		p.pairs(kv("recipient", keyset.ageRecipient))
+	}
 	p.blank()
 	switch {
 	case bs != nil && bs.Node != nil:
@@ -128,10 +131,10 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 	case bs != nil:
 		p.hint("Next steps: run `tincan up` (the directory will identify this node by name and key)")
 	case c.GenerateKey:
-		p.hint("Send this public key to the admin so they can run `tincan add-node --pubkey ...`")
-		p.hint("Then fill [directory] in the config and run `tincan up`")
+		p.hint("Send the public key and age recipient to the admin to run `tincan add-node --pub-key <key> --age-recipient <recipient>`")
+		p.hint("Then verify [drop.client] and the publisher_pubkey, and run `tincan up`")
 	default:
-		p.hint("Next steps: fill [directory] and verify [drop.client], then run `tincan up`")
+		p.hint("Next steps: fill [directory] (network_identity, publisher_pubkey) and verify [drop.client], then run `tincan up`")
 	}
 	firewallHint(p, cfg.Wireguard.ListenPort)
 	return nil
@@ -163,35 +166,55 @@ func discoveryPort() int {
 	return port
 }
 
-func (c *JoinCmd) resolveKeys(bs *bootstrap.Bootstrap) (string, string, error) {
+// keyset is the material join writes into the client config: the WireGuard
+// keypair plus the node's own age identity (and, when generated locally, the
+// recipient to hand to the admin).
+type keyset struct {
+	wgPrivate    string
+	wgPublic     string
+	ageIdentity  string
+	ageRecipient string
+}
+
+func (c *JoinCmd) resolveKeys(bs *bootstrap.Bootstrap) (keyset, error) {
+	// Admin generated the node's keys and delivered them in the bootstrap.
 	if bs != nil && bs.Node != nil && bs.Node.PrivateKey != "" {
 		if c.GenerateKey || c.PrivateKeyFile != "" {
-			return "", "", errors.New("bootstrap already contains a WireGuard private key")
+			return keyset{}, errors.New("bootstrap already contains a WireGuard private key")
 		}
-		return bs.Node.PrivateKey, bs.Node.PublicKey, nil
+		return keyset{wgPrivate: bs.Node.PrivateKey, wgPublic: bs.Node.PublicKey, ageIdentity: bs.Node.AgeIdentity}, nil
 	}
+	// Operator generates both keypairs locally; the secrets never leave this
+	// machine. The public key and age recipient are printed for the admin's
+	// `add-node --pub-key … --age-recipient …`.
 	if c.GenerateKey {
-		priv, pub, err := keys.GenerateWGKeypair()
+		wgPriv, wgPub, err := keys.GenerateWGKeypair()
 		if err != nil {
-			return "", "", err
+			return keyset{}, err
 		}
-		if err := verifyPubKey(bs, pub); err != nil {
-			return "", "", err
+		if err := verifyPubKey(bs, wgPub); err != nil {
+			return keyset{}, err
 		}
-		return priv, pub, nil
+		ageID, ageRcpt, err := keys.GenerateAgeIdentity()
+		if err != nil {
+			return keyset{}, err
+		}
+		return keyset{wgPrivate: wgPriv, wgPublic: wgPub, ageIdentity: ageID, ageRecipient: ageRcpt}, nil
 	}
+	// Manual: read the WG private key; the age identity is filled into
+	// [directory].network_identity by hand (the printed next-steps say so).
 	priv, err := c.readPrivateKey()
 	if err != nil {
-		return "", "", err
+		return keyset{}, err
 	}
 	pub, err := keys.PublicKeyFromWGPrivate(priv)
 	if err != nil {
-		return "", "", err
+		return keyset{}, err
 	}
 	if err := verifyPubKey(bs, pub); err != nil {
-		return "", "", err
+		return keyset{}, err
 	}
-	return priv, pub, nil
+	return keyset{wgPrivate: priv, wgPublic: pub}, nil
 }
 
 func verifyPubKey(bs *bootstrap.Bootstrap, pub string) error {

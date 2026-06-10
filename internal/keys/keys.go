@@ -82,6 +82,25 @@ func ParseAgeIdentity(identity string) (*age.X25519Identity, error) {
 	return id, nil
 }
 
+func ParseAgeRecipient(recipient string) (*age.X25519Recipient, error) {
+	r, err := age.ParseX25519Recipient(strings.TrimSpace(recipient))
+	if err != nil {
+		return nil, fmt.Errorf("parse age recipient: %w", err)
+	}
+	return r, nil
+}
+
+// AgeRecipientFromIdentity derives the public recipient (age1…) that
+// corresponds to an age secret identity (AGE-SECRET-KEY-1…). Used to confirm a
+// node's identity matches the recipient the admin published for it.
+func AgeRecipientFromIdentity(identity string) (string, error) {
+	id, err := ParseAgeIdentity(identity)
+	if err != nil {
+		return "", err
+	}
+	return id.Recipient().String(), nil
+}
+
 func GenerateEd25519Keypair() (publicKey string, privateKey string, err error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

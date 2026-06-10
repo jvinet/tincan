@@ -26,7 +26,8 @@ type AddNodeCmd struct {
 	Endpoint   string `help:"Published endpoint for the node, as host:port."`
 	NoPublish  bool   `name:"no-publish" help:"Save changes to the working directory without publishing to the drop."`
 
-	Bootstrap string `group:"tincanclient" type:"path" help:"Write a node bootstrap JSON file at this path."`
+	Bootstrap    string `group:"tincanclient" type:"path" help:"Write a node bootstrap JSON file at this path."`
+	AgeRecipient string `group:"tincanclient" name:"age-recipient" help:"Existing age recipient (age1…) for the node; pair with --pub-key when the operator generated the node's keys locally."`
 
 	WGQR     bool   `group:"wgclient" name:"wg-qr" help:"Print the WireGuard config as a QR code on stdout, for the mobile WireGuard app."`
 	WGQRPNG  string `group:"wgclient" name:"wg-qr-png" type:"path" help:"Write the WireGuard config QR code to this PNG file."`
@@ -77,6 +78,25 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	} else if _, err := keys.ParseWGPublic(publicKey); err != nil {
 		return err
 	}
+	// A tincan node decrypts the directory with its own age key. Generate one
+	// alongside a generated WG keypair; for the bring-your-own-keys flow the
+	// operator supplies the recipient via --age-recipient (the secret never
+	// leaves their machine). Plain-WireGuard nodes don't run tincan, so they
+	// get no age key and are simply not directory recipients.
+	ageRecipient := c.AgeRecipient
+	generatedAgeIdentity := ""
+	if !wgClient {
+		if ageRecipient == "" {
+			id, rcpt, err := keys.GenerateAgeIdentity()
+			if err != nil {
+				return err
+			}
+			generatedAgeIdentity = id
+			ageRecipient = rcpt
+		} else if _, err := keys.ParseAgeRecipient(ageRecipient); err != nil {
+			return err
+		}
+	}
 	for _, node := range dir.Nodes {
 		if node.PublicKey == publicKey {
 			return fmt.Errorf("public key already belongs to node %q", node.Name)
@@ -119,7 +139,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		}
 	}
 
-	dir.Nodes = append(dir.Nodes, directory.Node{Name: c.Name, PublicKey: publicKey, TunnelIP: tunnelIP, Endpoint: c.Endpoint})
+	dir.Nodes = append(dir.Nodes, directory.Node{Name: c.Name, PublicKey: publicKey, TunnelIP: tunnelIP, AgeRecipient: ageRecipient, Endpoint: c.Endpoint})
 	if c.NoPublish {
 		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
 			return err
@@ -134,11 +154,12 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	}
 	if c.Bootstrap != "" {
 		node := bootstrap.Node{
-			Name:       c.Name,
-			TunnelIP:   tunnelIP,
-			ListenPort: listenPort,
-			PublicKey:  publicKey,
-			PrivateKey: generatedPrivateKey,
+			Name:        c.Name,
+			TunnelIP:    tunnelIP,
+			ListenPort:  listenPort,
+			PublicKey:   publicKey,
+			PrivateKey:  generatedPrivateKey,
+			AgeIdentity: generatedAgeIdentity,
 		}
 		if err := bootstrap.Write(c.Bootstrap, bootstrap.WithNode(bootstrap.Network(cfg, dir.Serial), node)); err != nil {
 			return err
@@ -160,12 +181,17 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		kv("allocated IP", tunnelIP),
 		kv("public key", publicKey),
 	}
-	// Keep the private key out of the scrollback whenever it already rides in
-	// an artifact: the wg-quick QR/conf for a WireGuard client, or the
-	// bootstrap JSON for a tincan client. Only echo it when there is no other
-	// channel (no --bootstrap), so the operator can still transmit it.
-	if generatedPrivateKey != "" && !wgClient && c.Bootstrap == "" {
-		items = append(items, secret("private key", generatedPrivateKey))
+	// Keep generated secrets out of the scrollback whenever they already ride
+	// in an artifact: the wg-quick QR/conf for a WireGuard client, or the
+	// bootstrap JSON for a tincan client. Only echo them when there is no other
+	// channel (no --bootstrap), so the operator can still transmit them.
+	if !wgClient && c.Bootstrap == "" {
+		if generatedPrivateKey != "" {
+			items = append(items, secret("private key", generatedPrivateKey))
+		}
+		if generatedAgeIdentity != "" {
+			items = append(items, secret("age identity", generatedAgeIdentity))
+		}
 	}
 	p.pairs(items...)
 	if wgClient {
@@ -196,15 +222,15 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		p.section("Bootstrap")
 		p.pairs(kv("file", c.Bootstrap))
 	}
-	if generatedPrivateKey != "" {
+	if generatedPrivateKey != "" || generatedAgeIdentity != "" {
 		p.blank()
 		switch {
 		case c.Bootstrap != "":
-			p.warn("the bootstrap file contains a WireGuard private key; transmit it over a secure channel")
+			p.warn("the bootstrap file contains the node's WireGuard private key and age identity; transmit it over a secure channel")
 		case wgClient:
 			p.warn("the enrollment artifact embeds the node's WireGuard private key; treat it as a secret and remove it once the device is enrolled")
 		default:
-			p.warn("transmit this private key securely to the node operator, then clear this terminal")
+			p.warn("transmit the private key and age identity securely to the node operator, then clear this terminal")
 		}
 	}
 	if c.NoPublish {
@@ -233,6 +259,12 @@ func (c *AddNodeCmd) validateFlags() error {
 	default: // tincan
 		if anyWG {
 			return errors.New("--wg-qr, --wg-qr-png, and --wg-config require --client-type=wireguard")
+		}
+		if c.AgeRecipient != "" && c.PubKey == "" {
+			return errors.New("--age-recipient pairs with --pub-key (the operator's locally generated keys); omit both to have tincan generate the keypair")
+		}
+		if c.PubKey != "" && c.AgeRecipient == "" {
+			return errors.New("--pub-key needs --age-recipient too: a tincan node decrypts the directory with its own age key (use `tincan join --generate-key` to produce both)")
 		}
 	}
 	return nil
