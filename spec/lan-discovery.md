@@ -45,9 +45,9 @@ and doesn't require introducing a tunnel-internal control plane.
 | Beacon cadence | 30s steady-state; initial burst of 3 over 5s on startup; on-receipt response when a known pubkey is unfamiliar (rate-limited to 1/peer/5s) |
 | Egress interface(s) | Every non-loopback, non-Tincan link with at least one global-scope IPv4 or IPv6 address |
 | New WG state? | **No.** LAN endpoint is just another candidate in `chooseEndpoint` precedence |
-| Endpoint precedence | `Endpoint > LANEndpoint (fresh) > ObservedEndpoint > empty` |
-| LAN endpoint TTL | 90s since last beacon (3× cadence) |
-| Invalidation on failure | Entering `RELAYED` for a peer marks that peer's LAN endpoint as failed; next beacon re-validates |
+| Endpoint precedence | `Endpoint > LANEndpoint (fresh) > ObservedEndpoint > empty`; same-NAT peers retry the last-known LAN endpoint even past TTL (see below) |
+| LAN endpoint TTL | 90s since last beacon (3× cadence); not enforced for same-NAT peers, whose only fallback is a hairpin address |
+| Invalidation on failure | Entering `RELAYED` for a peer marks that peer's LAN endpoint as failed; next beacon re-validates. Same-NAT peers bypass the blacklist |
 | Directory schema | **No change.** Discovery is purely client-local |
 | Config knob | `[discovery].enabled` (default `true`); separate from `[observe]` |
 | Module path | `internal/discovery/` (new) |
@@ -148,7 +148,25 @@ treated as one logical event (deduped by pubkey + source IP).
 ### Receiving and processing
 
 A single listener goroutine joins both groups (IPv4 + IPv6) on the
-default port and reads beacons. For each:
+default port and reads beacons.
+
+Group membership is not a join-once affair. A maintainer goroutine per
+family re-enumerates the live LAN interfaces every beacon interval and
+re-joins the group on each — leave first, then join, so the join is
+never a kernel refcount no-op and always emits a fresh IGMP/MLD
+membership report. This covers three receive-side failure modes that
+produce a node that transmits beacons but never hears any (the sender
+re-enumerates interfaces on every emit, so transmission survives all
+three):
+
+- an interface that qualifies only *after* the daemon started (boot race
+  against DHCP / Wi-Fi association);
+- an interface recreated with a new index (driver reload, USB replug);
+- a snooping switch that ages the group out of its forwarding tables on
+  a LAN with no IGMP querier — no local event fires for this, so only
+  the periodic re-announce heals it.
+
+For each received beacon:
 
 1. Decode msgpack into a `Beacon`. If `V == 0` or decode fails, drop.
    Future schemas (`V > 1`) decode into the V1 struct, ignoring unknown
@@ -179,9 +197,10 @@ The LAN endpoint is exposed only through `chooseEndpoint` in
 ### Endpoint precedence (revised)
 
 ```
-chooseEndpoint(node, lanStore, now):
+chooseEndpoint(self, node, lanStore, now):
   if node.Endpoint != ""                       -> use operator endpoint
-  if lan := lanStore.Lookup(node.PublicKey, now); lan != "" -> use lan
+  staleOK := sameNAT(self, node)               // admin observed both at one public IP
+  if lan := lanStore.Lookup(node.PublicKey, now, staleOK); lan != "" -> use lan
   if observedFresh(node, now)                  -> use ObservedEndpoint
   return ""
 ```
@@ -191,6 +210,26 @@ Where `lanStore.Lookup` returns the LAN endpoint iff:
 - `now - LearnedAt <= LANEndpointTTL` (90s default),
 - `FailedAt.IsZero() || FailedAt.Before(LearnedAt)` (not blacklisted by
   a more recent failure).
+
+With `staleOK` (peer observed behind the same public IP as self) the TTL
+and blacklist checks are skipped and the most recently learned endpoint
+is returned regardless of age. The fallback for such a peer is its
+`ObservedEndpoint` — self's own public IP, reachable only if the router
+supports NAT hairpinning, which most consumer routers don't. A stale LAN
+endpoint either handshakes (recovering the direct path even when beacons
+have stopped flowing — host firewall, AP multicast filtering, phone
+doze) or fails harmlessly while the relay carries traffic; the same
+trust model beacons already rely on.
+
+### Working paths are never overwritten
+
+`Apply` pushes the chosen endpoint to the kernel only when the peer's
+last handshake is older than 90s (matching the relay controller's
+`DirectFailedAfter`) or the peer is new. A fresh handshake proves the
+kernel's current endpoint works — often one the kernel roamed to (e.g. a
+same-LAN source address) that appears in no directory and no store — and
+overwriting it would blackhole outbound traffic to the peer until its
+next inbound packet re-roams the endpoint.
 
 ### LANState lifecycle
 
@@ -214,7 +253,10 @@ Three events advance the state:
 - **RELAYED transition** (relay controller, see below): `FailedAt = now`
   is stamped for any peer that just transitioned `DIRECT → RELAYED`.
   This blacklists the LAN endpoint until the next beacon (which will
-  push `LearnedAt > FailedAt` and unblock it).
+  push `LearnedAt > FailedAt` and unblock it). Same-NAT peers are exempt
+  from the blacklist at lookup time: their shadow-peer probes keep
+  targeting the last-known LAN endpoint, because the hairpin alternative
+  can never complete a handshake.
 
 ### Why no new state in `relay.Mode`?
 
@@ -452,7 +494,10 @@ and processes them (filter on self-source-IP drops them as expected).
 IGMP/MLD snooping switches will forward our multicast traffic to ports
 that have a membership report. The listener's group join issues that
 report on every live LAN interface, so all expected paths get the
-traffic. Switches without snooping flood — also fine.
+traffic — and the membership maintainer re-issues it every beacon
+interval (leave + join), so a switch that ages the group out of its
+tables (typical on LANs with no IGMP querier) recovers within one
+cycle. Switches without snooping flood — also fine.
 
 ### Wi-Fi AP client isolation
 Some access points (especially hotels/cafés) drop client-to-client

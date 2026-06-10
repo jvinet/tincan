@@ -18,21 +18,23 @@ import (
 // and updates the store. On meaningful updates, it nudges wakeCh so the
 // daemon loop reconverges immediately. On a *first-seen* pubkey, it also
 // nudges reactCh so the sender can answer with a beacon immediately.
-func startListeners(ctx context.Context, ipv4Addr, ipv6Addr *net.UDPAddr, ifaces []net.Interface, store *Store, dir DirectorySource, wakeCh chan<- string, reactCh chan<- struct{}) error {
+// Alongside each read loop runs a membership maintainer that keeps the
+// multicast joins alive as interfaces come, go, and bounce.
+func startListeners(ctx context.Context, cfg Config, ipv4Addr, ipv6Addr *net.UDPAddr, ifaces []net.Interface, store *Store, dir DirectorySource, wakeCh chan<- string, reactCh chan<- struct{}) error {
 	if ipv4Addr != nil {
-		if err := startIPv4Listener(ctx, ipv4Addr, ifaces, store, dir, wakeCh, reactCh); err != nil {
+		if err := startIPv4Listener(ctx, cfg, ipv4Addr, ifaces, store, dir, wakeCh, reactCh); err != nil {
 			return err
 		}
 	}
 	if ipv6Addr != nil {
-		if err := startIPv6Listener(ctx, ipv6Addr, ifaces, store, dir, wakeCh, reactCh); err != nil {
+		if err := startIPv6Listener(ctx, cfg, ipv6Addr, ifaces, store, dir, wakeCh, reactCh); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func startIPv4Listener(ctx context.Context, addr *net.UDPAddr, ifaces []net.Interface, store *Store, dir DirectorySource, wakeCh chan<- string, reactCh chan<- struct{}) error {
+func startIPv4Listener(ctx context.Context, cfg Config, addr *net.UDPAddr, ifaces []net.Interface, store *Store, dir DirectorySource, wakeCh chan<- string, reactCh chan<- struct{}) error {
 	conn, err := net.ListenPacket("udp4", "0.0.0.0:"+strconv.Itoa(addr.Port))
 	if err != nil {
 		return err
@@ -42,24 +44,18 @@ func startIPv4Listener(ctx context.Context, addr *net.UDPAddr, ifaces []net.Inte
 		_ = conn.Close()
 		return err
 	}
-	joined := 0
-	for _, iface := range ifaces {
-		if err := p.JoinGroup(&iface, &net.UDPAddr{IP: addr.IP}); err != nil {
-			slog.Debug("discovery: IPv4 multicast join failed", "iface", iface.Name, "error", err)
-			continue
-		}
-		joined++
-	}
-	if joined == 0 {
+	group := &net.UDPAddr{IP: addr.IP}
+	if joined := rejoinGroups(p, group, ifaces, "IPv4"); joined == 0 {
 		slog.Warn("discovery: no interfaces joined IPv4 multicast", "addr", addr.String())
 	} else {
 		slog.Debug("discovery: IPv4 multicast listening", "joined", joined, "addr", addr.String())
 	}
 	go runIPv4Listener(ctx, p, conn, store, dir, wakeCh, reactCh)
+	go maintainMembership(ctx, p, group, cfg, "IPv4")
 	return nil
 }
 
-func startIPv6Listener(ctx context.Context, addr *net.UDPAddr, ifaces []net.Interface, store *Store, dir DirectorySource, wakeCh chan<- string, reactCh chan<- struct{}) error {
+func startIPv6Listener(ctx context.Context, cfg Config, addr *net.UDPAddr, ifaces []net.Interface, store *Store, dir DirectorySource, wakeCh chan<- string, reactCh chan<- struct{}) error {
 	conn, err := net.ListenPacket("udp6", "[::]:"+strconv.Itoa(addr.Port))
 	if err != nil {
 		return err
@@ -69,21 +65,73 @@ func startIPv6Listener(ctx context.Context, addr *net.UDPAddr, ifaces []net.Inte
 		_ = conn.Close()
 		return err
 	}
-	joined := 0
-	for _, iface := range ifaces {
-		if err := p.JoinGroup(&iface, &net.UDPAddr{IP: addr.IP}); err != nil {
-			slog.Debug("discovery: IPv6 multicast join failed", "iface", iface.Name, "error", err)
-			continue
-		}
-		joined++
-	}
-	if joined == 0 {
+	group := &net.UDPAddr{IP: addr.IP}
+	if joined := rejoinGroups(p, group, ifaces, "IPv6"); joined == 0 {
 		slog.Warn("discovery: no interfaces joined IPv6 multicast", "addr", addr.String())
 	} else {
 		slog.Debug("discovery: IPv6 multicast listening", "joined", joined, "addr", addr.String())
 	}
 	go runIPv6Listener(ctx, p, conn, store, dir, wakeCh, reactCh)
+	go maintainMembership(ctx, p, group, cfg, "IPv6")
 	return nil
+}
+
+// groupConn is the multicast-membership subset of ipv4.PacketConn and
+// ipv6.PacketConn, factored out so membership maintenance is testable
+// with a fake.
+type groupConn interface {
+	JoinGroup(*net.Interface, net.Addr) error
+	LeaveGroup(*net.Interface, net.Addr) error
+}
+
+// maintainMembership periodically re-enumerates LAN interfaces and
+// re-joins the multicast group on each, paced by the beacon interval.
+// Without it, membership is frozen at whatever interfaces existed when
+// the daemon started: a daemon that wins the boot race against DHCP or
+// Wi-Fi association stays receive-deaf for its entire lifetime while
+// still transmitting beacons (the sender re-enumerates per emit), and a
+// snooping switch that ages the group out of its tables silences
+// reception with no local event to react to. Runs until ctx is canceled.
+func maintainMembership(ctx context.Context, conn groupConn, group net.Addr, cfg Config, family string) {
+	interval := cfg.BeaconInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		ifaces, err := liveLANInterfaces(cfg.InterfaceFilter)
+		if err != nil {
+			slog.Debug("discovery: interface enumeration failed during re-join", "error", err)
+			continue
+		}
+		rejoinGroups(conn, group, ifaces, family)
+	}
+}
+
+// rejoinGroups joins group on every given interface, leaving first so the
+// join is never a refcount no-op: the fresh join makes the kernel emit a
+// new IGMP/MLD membership report, which restores forwarding on snooping
+// switches that aged the group out (common on LANs with no IGMP querier).
+// Leave errors are expected (the group may not be joined on that
+// interface yet) and ignored; join failures are logged and skipped.
+// Returns the number of successful joins.
+func rejoinGroups(conn groupConn, group net.Addr, ifaces []net.Interface, family string) int {
+	joined := 0
+	for i := range ifaces {
+		_ = conn.LeaveGroup(&ifaces[i], group)
+		if err := conn.JoinGroup(&ifaces[i], group); err != nil {
+			slog.Debug("discovery: multicast join failed", "family", family, "iface", ifaces[i].Name, "error", err)
+			continue
+		}
+		joined++
+	}
+	return joined
 }
 
 func runIPv4Listener(ctx context.Context, p *ipv4.PacketConn, conn net.PacketConn, store *Store, dir DirectorySource, wakeCh chan<- string, reactCh chan<- struct{}) {

@@ -92,11 +92,13 @@ func (m *Manager) Ensure(self directory.Node, dir directory.Directory, relayed m
 
 // mergeAgainstKernel adapts a freshly-built peer list for use with
 // ReplacePeers=false: it normalizes nil keepalive durations to an explicit
-// zero (so the kernel reliably picks up role changes) and appends Remove
-// entries for any peer currently in the kernel that no longer appears in the
-// directory. Using ReplacePeers=false preserves kernel-tracked state
-// (LastHandshakeTime, source-learned endpoints) across reconcile loops, which
-// the admin's endpoint observation depends on.
+// zero (so the kernel reliably picks up role changes), drops endpoint
+// overrides for peers whose current path is proven live (see
+// preserveLiveEndpoints), and appends Remove entries for any peer currently
+// in the kernel that no longer appears in the directory. Using
+// ReplacePeers=false preserves kernel-tracked state (LastHandshakeTime,
+// roamed endpoints) across reconcile loops, which the admin's endpoint
+// observation and the relay controller's liveness checks depend on.
 func mergeAgainstKernel(client *wgctrl.Client, iface string, peers []wgtypes.PeerConfig) []wgtypes.PeerConfig {
 	zero := time.Duration(0)
 	for i := range peers {
@@ -108,7 +110,42 @@ func mergeAgainstKernel(client *wgctrl.Client, iface string, peers []wgtypes.Pee
 	if err != nil {
 		return peers
 	}
+	peers = preserveLiveEndpoints(peers, dev.Peers, time.Now())
 	return appendDeletions(peers, dev.Peers)
+}
+
+// handshakeFreshWindow mirrors relay.DefaultDirectFailedAfter: while a
+// kernel peer's last handshake is younger than this, its current path
+// works and its endpoint is left alone; once older, the relay controller
+// considers the path dead and Apply resumes pushing endpoint picks.
+const handshakeFreshWindow = 90 * time.Second
+
+// preserveLiveEndpoints clears the Endpoint on any PeerConfig whose kernel
+// peer completed a handshake within handshakeFreshWindow. A fresh handshake
+// proves the kernel's current endpoint works — and it may be one the kernel
+// roamed to (e.g. a same-LAN source address) that never appears in the
+// directory or LAN store. Overwriting it would blackhole traffic to that
+// peer until its next inbound packet re-roams the endpoint. Endpoints are
+// only pushed when the path is already stale or the peer is new, when
+// changing them can't make things worse.
+func preserveLiveEndpoints(peers []wgtypes.PeerConfig, kernel []wgtypes.Peer, now time.Time) []wgtypes.PeerConfig {
+	byKey := make(map[wgtypes.Key]wgtypes.Peer, len(kernel))
+	for _, kp := range kernel {
+		byKey[kp.PublicKey] = kp
+	}
+	for i := range peers {
+		if peers[i].Endpoint == nil {
+			continue
+		}
+		kp, ok := byKey[peers[i].PublicKey]
+		if !ok || kp.LastHandshakeTime.IsZero() {
+			continue
+		}
+		if now.Sub(kp.LastHandshakeTime) < handshakeFreshWindow {
+			peers[i].Endpoint = nil
+		}
+	}
+	return peers
 }
 
 func appendDeletions(target []wgtypes.PeerConfig, existing []wgtypes.Peer) []wgtypes.PeerConfig {

@@ -87,6 +87,17 @@ func (s *Store) Lookup(pubkey string, now time.Time) string {
 	return entry.Endpoint
 }
 
+// LookupLastKnown returns the most recently learned LAN endpoint for
+// pubkey regardless of TTL expiry or failure-blacklisting, or "" if no
+// beacon was ever received from it. Callers use this when every
+// alternative is known to be worse — a peer behind the same NAT as self,
+// whose directory endpoint would require hairpin routing.
+func (s *Store) LookupLastKnown(pubkey string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.entries[pubkey].Endpoint
+}
+
 // UpdateResult describes what changed after an Update call.
 type UpdateResult struct {
 	// Changed is true when the entry represents a meaningful state

@@ -14,9 +14,13 @@ import (
 )
 
 // LANEndpointLookup returns a learned LAN endpoint (host:port) for the
-// given peer pubkey, or "" if none is known/usable. Pass nil to
-// BuildPeerConfigs to disable LAN preference entirely.
-type LANEndpointLookup func(pubkey string) string
+// given peer pubkey, or "" if none is known/usable. When staleOK is true
+// the caller wants the most recently learned endpoint even if it has
+// outlived its TTL or was blacklisted by a relay failure; chooseEndpoint
+// asks for this for peers behind the same NAT as self, where the only
+// alternative is a hairpin address. Pass nil to BuildPeerConfigs to
+// disable LAN preference entirely.
+type LANEndpointLookup func(pubkey string, staleOK bool) string
 
 // BuildPeerConfigs translates the directory into a list of WireGuard
 // PeerConfigs for self's interface. When relayed is non-empty, the listed
@@ -36,7 +40,11 @@ type LANEndpointLookup func(pubkey string) string
 // lanLookup, when non-nil, is consulted to obtain a per-peer LAN endpoint
 // learned via the discovery package. LAN endpoints rank above
 // admin-observed endpoints but below operator-configured ones in
-// chooseEndpoint's precedence.
+// chooseEndpoint's precedence. For a peer observed behind the same public
+// IP as self, the lookup is made with staleOK=true: that peer's observed
+// endpoint is self's own public IP, reachable only if the router supports
+// NAT hairpinning, so the last-known LAN endpoint stays preferred even
+// past its TTL.
 func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir directory.Directory, relayed map[string]bool, lanLookup LANEndpointLookup) ([]wgtypes.PeerConfig, error) {
 	selfHasEndpoint := self.Endpoint != ""
 	keepalive := time.Duration(0)
@@ -86,7 +94,7 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 		} else {
 			peer.AllowedIPs = []net.IPNet{*tunnel}
 		}
-		endpointStr := chooseEndpoint(node, lanLookup)
+		endpointStr := chooseEndpoint(self, node, lanLookup)
 		if endpointStr != "" {
 			endpoint, err := net.ResolveUDPAddr("udp", endpointStr)
 			if err != nil {
@@ -110,12 +118,12 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 	return peers, nil
 }
 
-func chooseEndpoint(node directory.Node, lanLookup LANEndpointLookup) string {
+func chooseEndpoint(self, node directory.Node, lanLookup LANEndpointLookup) string {
 	if node.Endpoint != "" {
 		return node.Endpoint
 	}
 	if lanLookup != nil {
-		if lan := lanLookup(node.PublicKey); lan != "" {
+		if lan := lanLookup(node.PublicKey, behindSameNAT(self, node)); lan != "" {
 			return lan
 		}
 	}
@@ -124,4 +132,24 @@ func chooseEndpoint(node directory.Node, lanLookup LANEndpointLookup) string {
 	// clears ObservedEndpoint once a peer stops handshaking, and a dead
 	// endpoint is recovered via relay (handshake-driven), not by expiry here.
 	return node.ObservedEndpoint
+}
+
+// behindSameNAT reports whether self and node were observed by the admin at
+// the same public IP, implying they share a NAT. Such a peer's observed
+// endpoint is a hairpin address — self's own public IP — which most consumer
+// routers won't route back inside, so a last-known LAN endpoint (even one
+// past its TTL or blacklisted) is the better handshake target: it either
+// completes, or the relay path keeps carrying traffic, exactly the trust
+// model beacons already rely on.
+func behindSameNAT(self, node directory.Node) bool {
+	selfIP := observedIP(self)
+	return selfIP != nil && selfIP.Equal(observedIP(node))
+}
+
+func observedIP(n directory.Node) net.IP {
+	host, _, err := net.SplitHostPort(n.ObservedEndpoint)
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(host)
 }

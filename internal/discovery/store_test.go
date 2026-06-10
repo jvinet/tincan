@@ -63,6 +63,33 @@ func TestStoreMarkFailedAndRevalidate(t *testing.T) {
 	}
 }
 
+func TestStoreLookupLastKnown(t *testing.T) {
+	s := NewStore(90 * time.Second)
+	now := time.Now()
+	if got := s.LookupLastKnown("alice"); got != "" {
+		t.Fatalf("never-seen peer = %q, want empty", got)
+	}
+	s.Update("alice", "10.0.0.1:51820", now)
+
+	// Past TTL: strict Lookup refuses, last-known still serves.
+	stale := now.Add(10 * time.Minute)
+	if got := s.Lookup("alice", stale); got != "" {
+		t.Fatalf("strict lookup past TTL = %q, want empty", got)
+	}
+	if got := s.LookupLastKnown("alice"); got != "10.0.0.1:51820" {
+		t.Fatalf("last-known past TTL = %q", got)
+	}
+
+	// Blacklisted: same split.
+	s.MarkFailed("alice", now.Add(time.Second))
+	if got := s.Lookup("alice", now.Add(2*time.Second)); got != "" {
+		t.Fatalf("strict lookup while blacklisted = %q, want empty", got)
+	}
+	if got := s.LookupLastKnown("alice"); got != "10.0.0.1:51820" {
+		t.Fatalf("last-known while blacklisted = %q", got)
+	}
+}
+
 func TestStoreMarkFailedUnknownPubkeyNoop(t *testing.T) {
 	s := NewStore(90 * time.Second)
 	s.MarkFailed("ghost", time.Now())

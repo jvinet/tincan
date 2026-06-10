@@ -225,7 +225,10 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	logRelayTransitions(p, res.Directory, decision, prevModes)
 	var lanLookup wg.LANEndpointLookup
 	if lanStore != nil {
-		lanLookup = func(pubkey string) string {
+		lanLookup = func(pubkey string, staleOK bool) string {
+			if staleOK {
+				return lanStore.LookupLastKnown(pubkey)
+			}
 			return lanStore.Lookup(pubkey, time.Now())
 		}
 	}
@@ -270,7 +273,10 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 // DIRECT → RELAYED. The kernel was using whatever chooseEndpoint picked
 // (operator > LAN > observed), and a stale-handshake transition is the
 // signal that endpoint isn't working. Blacklisting clears on the next
-// beacon that arrives, by virtue of LearnedAt > FailedAt.
+// beacon that arrives, by virtue of LearnedAt > FailedAt. Peers behind the
+// same NAT as self bypass the blacklist (chooseEndpoint looks up with
+// staleOK=true): their observed endpoint is a hairpin address, so the
+// last-known LAN endpoint stays the probe target regardless.
 func markLANFailures(states map[string]relay.PeerState, prev map[string]relay.Mode, lanStore *discovery.Store, now time.Time) {
 	for key, state := range states {
 		old, hadOld := prev[key]

@@ -198,7 +198,7 @@ func TestChooseEndpoint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := chooseEndpoint(tc.node, nil)
+			got := chooseEndpoint(directory.Node{}, tc.node, nil)
 			if got != tc.want {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
@@ -208,7 +208,7 @@ func TestChooseEndpoint(t *testing.T) {
 
 func TestChooseEndpointLANPrecedence(t *testing.T) {
 	pk := "PEER-PUBKEY"
-	lan := func(p string) string {
+	lan := func(p string, staleOK bool) string {
 		if p == pk {
 			return "192.168.1.42:51820"
 		}
@@ -243,11 +243,100 @@ func TestChooseEndpointLANPrecedence(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := chooseEndpoint(tc.node, lan)
+			got := chooseEndpoint(directory.Node{}, tc.node, lan)
 			if got != tc.want {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestChooseEndpointSameNAT(t *testing.T) {
+	pk := "PEER-PUBKEY"
+	// Lookup double: nothing fresh, but a last-known (stale/blacklisted)
+	// entry exists. Only staleOK=true calls may see it.
+	lan := func(p string, staleOK bool) string {
+		if p == pk && staleOK {
+			return "192.168.1.42:51820"
+		}
+		return ""
+	}
+	natSelf := directory.Node{PublicKey: "SELF-PUBKEY", ObservedEndpoint: "203.0.113.7:1111"}
+
+	cases := []struct {
+		name string
+		self directory.Node
+		node directory.Node
+		want string
+	}{
+		{
+			name: "same public IP retries last-known LAN endpoint past TTL",
+			self: natSelf,
+			node: directory.Node{PublicKey: pk, ObservedEndpoint: "203.0.113.7:5555"},
+			want: "192.168.1.42:51820",
+		},
+		{
+			name: "same public IP without any LAN knowledge still falls back to observed",
+			self: natSelf,
+			node: directory.Node{PublicKey: "never-beaconed", ObservedEndpoint: "203.0.113.7:5555"},
+			want: "203.0.113.7:5555",
+		},
+		{
+			name: "different public IP keeps strict TTL semantics",
+			self: natSelf,
+			node: directory.Node{PublicKey: pk, ObservedEndpoint: "198.51.100.9:5555"},
+			want: "198.51.100.9:5555",
+		},
+		{
+			name: "self without observed endpoint keeps strict TTL semantics",
+			self: directory.Node{PublicKey: "SELF-PUBKEY"},
+			node: directory.Node{PublicKey: pk, ObservedEndpoint: "203.0.113.7:5555"},
+			want: "203.0.113.7:5555",
+		},
+		{
+			name: "operator endpoint still wins over same-NAT LAN retry",
+			self: natSelf,
+			node: directory.Node{PublicKey: pk, Endpoint: "host:1234", ObservedEndpoint: "203.0.113.7:5555"},
+			want: "host:1234",
+		},
+		{
+			name: "same public IPv6 address detected through brackets",
+			self: directory.Node{PublicKey: "SELF-PUBKEY", ObservedEndpoint: "[2001:db8::7]:1111"},
+			node: directory.Node{PublicKey: pk, ObservedEndpoint: "[2001:db8::7]:5555"},
+			want: "192.168.1.42:51820",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := chooseEndpoint(tc.self, tc.node, lan)
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildPeerConfigsSameNATUsesLastKnownLAN(t *testing.T) {
+	self, dir := peerFixture(t)
+	self.ObservedEndpoint = "203.0.113.7:1111"
+	dir.Nodes[0] = self
+	dir.Nodes[2].ObservedEndpoint = "203.0.113.7:5555" // carol shares self's NAT
+	lan := func(p string, staleOK bool) string {
+		if p == dir.Nodes[2].PublicKey && staleOK {
+			return "192.168.1.42:51820"
+		}
+		return ""
+	}
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, lan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carol := peerByAllowedIP(peers, "10.42.0.3")
+	if carol == nil || carol.Endpoint == nil {
+		t.Fatalf("carol endpoint missing: %+v", carol)
+	}
+	if !carol.Endpoint.IP.Equal(net.ParseIP("192.168.1.42")) || carol.Endpoint.Port != 51820 {
+		t.Fatalf("carol endpoint=%v want last-known LAN 192.168.1.42:51820", carol.Endpoint)
 	}
 }
 

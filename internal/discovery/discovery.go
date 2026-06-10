@@ -28,6 +28,8 @@ type Config struct {
 	// MulticastIPv6 is the IPv6 multicast group address, e.g. "[ff02::1:8443]:51821".
 	MulticastIPv6 string
 	// BeaconInterval is the steady-state cadence between outbound beacons.
+	// It also paces the listeners' multicast membership maintenance (see
+	// maintainMembership).
 	BeaconInterval time.Duration
 	// BeaconTTL is how long a learned LAN endpoint remains usable without
 	// a refresh beacon. Should be at least 2× BeaconInterval.
@@ -64,7 +66,7 @@ func Start(ctx context.Context, cfg Config, dir DirectorySource, wakeCh chan<- s
 		return nil, fmt.Errorf("enumerate interfaces: %w", err)
 	}
 	reactCh := make(chan struct{}, 1)
-	if err := startListeners(ctx, ipv4Addr, ipv6Addr, ifaces, store, dir, wakeCh, reactCh); err != nil {
+	if err := startListeners(ctx, cfg, ipv4Addr, ipv6Addr, ifaces, store, dir, wakeCh, reactCh); err != nil {
 		return nil, fmt.Errorf("start listeners: %w", err)
 	}
 	if err := startSender(ctx, cfg, ipv4Addr, ipv6Addr, cfg.InterfaceFilter, store, reactCh); err != nil {
