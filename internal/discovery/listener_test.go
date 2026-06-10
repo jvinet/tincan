@@ -5,6 +5,9 @@ import (
 	"net"
 	"slices"
 	"testing"
+	"time"
+
+	"github.com/jvinet/tincan/internal/directory"
 )
 
 // fakeGroupConn records membership operations in order. LeaveGroup always
@@ -74,5 +77,91 @@ func TestRejoinGroupsNoInterfaces(t *testing.T) {
 	}
 	if len(conn.ops) != 0 {
 		t.Fatalf("ops=%v want none", conn.ops)
+	}
+}
+
+// --- processBeacon ingress filtering ---
+
+const tunnelIfIndex = 7
+
+// testFilter mimics a host where ifindex 7 is the Tincan interface and
+// everything else is a LAN NIC.
+func testFilter() beaconFilter {
+	return beaconFilter{
+		group:     net.ParseIP("239.255.84.67"),
+		skipIface: "tincan0",
+		ifaceName: func(index int) (string, error) {
+			if index == tunnelIfIndex {
+				return "tincan0", nil
+			}
+			return "eth0", nil
+		},
+	}
+}
+
+func testDirSource() DirectorySource {
+	return func() directory.Directory {
+		return directory.Directory{
+			NetworkCIDR: "10.42.0.0/24",
+			Nodes: []directory.Node{
+				{Name: "bob", PublicKey: "BOBKEY", TunnelIP: "10.42.0.2"},
+			},
+		}
+	}
+}
+
+func encodeBeacon(t *testing.T, pubkey string, port uint16) []byte {
+	t.Helper()
+	data, err := Encode(Beacon{PublicKey: pubkey, Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func runProcessBeacon(t *testing.T, dst net.IP, ifIndex int, srcIP string) *Store {
+	t.Helper()
+	store := NewStore(90 * time.Second)
+	src := &net.UDPAddr{IP: net.ParseIP(srcIP), Port: 51821}
+	processBeacon(encodeBeacon(t, "BOBKEY", 51820), src, dst, ifIndex, testFilter(), store, testDirSource(), nil, nil)
+	return store
+}
+
+func TestProcessBeaconAcceptsGroupAddressedLANBeacon(t *testing.T) {
+	store := runProcessBeacon(t, net.ParseIP("239.255.84.67"), 3, "192.0.2.10")
+	if got := store.Lookup("BOBKEY", time.Now()); got != "192.0.2.10:51820" {
+		t.Fatalf("Lookup=%q want %q", got, "192.0.2.10:51820")
+	}
+}
+
+func TestProcessBeaconDropsUnicastDestination(t *testing.T) {
+	// A beacon delivered to our unicast address — e.g. sent over the WAN or
+	// across the tunnel straight at the listen port — must never be learned.
+	store := runProcessBeacon(t, net.ParseIP("192.0.2.1"), 3, "192.0.2.10")
+	if got := store.LookupLastKnown("BOBKEY"); got != "" {
+		t.Fatalf("unicast-addressed beacon was learned: %q", got)
+	}
+}
+
+func TestProcessBeaconDropsWhenControlMessageMissing(t *testing.T) {
+	store := runProcessBeacon(t, nil, 3, "192.0.2.10")
+	if got := store.LookupLastKnown("BOBKEY"); got != "" {
+		t.Fatalf("beacon without destination metadata was learned: %q", got)
+	}
+}
+
+func TestProcessBeaconDropsTunnelIngress(t *testing.T) {
+	// IP_MULTICAST_ALL delivers group traffic from interfaces we never
+	// joined, including the tunnel; the ingress-interface check must drop it.
+	store := runProcessBeacon(t, net.ParseIP("239.255.84.67"), tunnelIfIndex, "192.0.2.10")
+	if got := store.LookupLastKnown("BOBKEY"); got != "" {
+		t.Fatalf("tunnel-ingress beacon was learned: %q", got)
+	}
+}
+
+func TestProcessBeaconDropsTunnelNetworkSource(t *testing.T) {
+	store := runProcessBeacon(t, net.ParseIP("239.255.84.67"), 3, "10.42.0.3")
+	if got := store.LookupLastKnown("BOBKEY"); got != "" {
+		t.Fatalf("tunnel-sourced beacon was learned: %q", got)
 	}
 }

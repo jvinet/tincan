@@ -467,12 +467,24 @@ when both arrive in the same cycle (lower latency at scale, no NAT
 weirdness). Implementation: tie-break in `Update` by address family.
 
 ### Beacon receive on the Tincan interface
-A receiver might be configured to listen on all interfaces and receive
-its own beacon (or a peer's, via the tunnel itself if Tincan ever
-carried multicast). We filter: if the receiving interface index is the
-Tincan interface, drop. We also drop beacons whose source IP matches
-any of our own non-loopback addresses (self-loopback via multicast on
-the same machine).
+The listener binds the wildcard address, so packets can reach it on
+paths that are not "a beacon multicast on the local LAN": Linux's
+`IP_MULTICAST_ALL` default delivers group traffic arriving on *any*
+interface (including the tunnel) to a socket that joined the group on
+none of them, and plain unicast to the listen port — from the WAN, or
+from a mesh member across the tunnel — lands on the wildcard bind
+directly. We therefore validate ingress before decoding:
+
+1. The packet's destination (via `IP_PKTINFO`/`IPV6_RECVPKTINFO`) must
+   be the multicast group; unicast and missing-metadata packets drop.
+2. The ingress interface index must not be the Tincan interface.
+3. The source IP must not fall inside the network CIDR (cryptokey
+   routing means tunnel-delivered packets always carry in-CIDR
+   sources).
+
+We also drop beacons whose source IP matches any of our own
+non-loopback addresses (self-loopback via multicast on the same
+machine).
 
 ### Network connectivity blip
 DHCP renewal that changes the LAN IP would invalidate our LAN endpoint
