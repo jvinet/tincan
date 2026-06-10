@@ -4,6 +4,7 @@ package wg
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -96,11 +97,18 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 		}
 		endpointStr := chooseEndpoint(self, node, lanLookup)
 		if endpointStr != "" {
+			// A single unresolvable endpoint (transient DNS failure, a
+			// malformed operator value) must not abort the whole batch:
+			// failing here would block pruning removed peers and applying
+			// relay decisions for every other peer, every iteration. Skip
+			// just this peer's endpoint — the kernel keeps whatever endpoint
+			// it last had, and the relay/shadow machinery recovers it.
 			endpoint, err := net.ResolveUDPAddr("udp", endpointStr)
 			if err != nil {
-				return nil, fmt.Errorf("resolve peer %q endpoint %q: %w", node.Name, endpointStr, err)
+				slog.Warn("skipping unresolvable peer endpoint", "peer", node.Name, "endpoint", endpointStr, "error", err)
+			} else {
+				peer.Endpoint = endpoint
 			}
-			peer.Endpoint = endpoint
 		}
 		if keepalive > 0 {
 			ka := keepalive

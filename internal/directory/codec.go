@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
+	"strconv"
+	"strings"
 	"time"
 
 	"filippo.io/age"
@@ -271,6 +274,42 @@ func Validate(dir Directory) error {
 			return fmt.Errorf("duplicate tunnel IP %q", node.TunnelIP)
 		}
 		seenIPs[node.TunnelIP] = struct{}{}
+		if err := validateEndpoint(node.Endpoint); err != nil {
+			return fmt.Errorf("node %q endpoint: %w", node.Name, err)
+		}
+		if err := validateEndpoint(node.ObservedEndpoint); err != nil {
+			return fmt.Errorf("node %q observed endpoint: %w", node.Name, err)
+		}
+	}
+	return nil
+}
+
+// validateEndpoint checks host:port *syntax* for a non-empty endpoint. It
+// deliberately does not resolve DNS: operator endpoints are hostnames
+// re-resolved every reconcile, and resolution failures are handled per-peer
+// at apply time (see wg.BuildPeerConfigs). The point is to reject garbage —
+// a missing port, an out-of-range port, or a control-character injection
+// (e.g. a newline smuggling extra lines into a generated wg-quick file) — at
+// publish time, before it reaches the signed directory. Since Validate runs
+// on both Seal and Open, a legitimately published directory always carries
+// syntactically valid endpoints, so this never trips a client.
+func validateEndpoint(endpoint string) error {
+	if endpoint == "" {
+		return nil
+	}
+	if strings.ContainsAny(endpoint, "\x00\n\r\t") {
+		return fmt.Errorf("%q contains control characters", endpoint)
+	}
+	host, port, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return fmt.Errorf("%q must be host:port: %w", endpoint, err)
+	}
+	if host == "" {
+		return fmt.Errorf("%q has empty host", endpoint)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p < 1 || p > 65535 {
+		return fmt.Errorf("%q has invalid port", endpoint)
 	}
 	return nil
 }

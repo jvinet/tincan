@@ -146,19 +146,30 @@ func TestBuildPeerConfigsRejectsBadPeerData(t *testing.T) {
 	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil); err == nil {
 		t.Fatal("expected invalid tunnel IP error")
 	}
+}
 
-	self, dir = peerFixture(t)
+// An endpoint that fails to resolve for one peer must not fail the whole
+// batch: that peer is emitted without an endpoint (the kernel keeps what it
+// has) while every other peer, and pruning, still applies. Endpoint *syntax*
+// is rejected earlier at directory.Validate; this guards against a resolution
+// failure (transient DNS in production; a malformed value here, which fails
+// ResolveUDPAddr locally without a lookup) on an otherwise valid directory.
+func TestBuildPeerConfigsSkipsUnresolvableEndpoint(t *testing.T) {
+	self, dir := peerFixture(t)
 	dir.Nodes[1].Endpoint = "not-a-host-port"
-	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil); err == nil {
-		t.Fatal("expected invalid endpoint error")
-	}
 
-	self, dir = peerFixture(t)
-	dir.Nodes[2].Endpoint = ""
-	dir.Nodes[2].ObservedEndpoint = "not-a-host-port"
-	dir.Nodes[2].ObservedAt = time.Now()
-	if _, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil); err == nil {
-		t.Fatal("expected invalid observed endpoint error")
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, nil, nil)
+	if err != nil {
+		t.Fatalf("one bad endpoint aborted the batch: %v", err)
+	}
+	if len(peers) != len(dir.Nodes)-1 {
+		t.Fatalf("emitted %d peers, want %d", len(peers), len(dir.Nodes)-1)
+	}
+	badKey, _ := keys.ParseWGPublic(dir.Nodes[1].PublicKey)
+	for _, p := range peers {
+		if p.PublicKey == badKey && p.Endpoint != nil {
+			t.Fatalf("unresolvable endpoint was applied: %v", p.Endpoint)
+		}
 	}
 }
 

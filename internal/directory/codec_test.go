@@ -377,6 +377,10 @@ func TestValidateRejectsBadDirectories(t *testing.T) {
 		{name: "IPv6 tunnel IP", mutate: func(d *Directory) { d.Nodes[0].TunnelIP = "fd00::1" }},
 		{name: "outside CIDR", mutate: func(d *Directory) { d.Nodes[0].TunnelIP = "10.43.0.1" }},
 		{name: "duplicate tunnel IP", mutate: func(d *Directory) { d.Nodes[1].TunnelIP = d.Nodes[0].TunnelIP }},
+		{name: "endpoint missing port", mutate: func(d *Directory) { d.Nodes[0].Endpoint = "host.example.com" }},
+		{name: "endpoint bad port", mutate: func(d *Directory) { d.Nodes[0].Endpoint = "host.example.com:99999" }},
+		{name: "endpoint newline injection", mutate: func(d *Directory) { d.Nodes[0].Endpoint = "host:51820\nPostUp = evil" }},
+		{name: "observed endpoint malformed", mutate: func(d *Directory) { d.Nodes[1].ObservedEndpoint = "garbage" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
