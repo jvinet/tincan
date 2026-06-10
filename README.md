@@ -151,6 +151,11 @@ sudo tincan publish           # re-publish the working directory
 the upload (changes are saved to the working directory). `publish` is for
 re-issuing after deferred edits or to recover from a partial upload.
 
+Before uploading, `publish` fetches the directory currently at the drop so it
+never reuses an already-published serial. If that fetch fails (an empty drop
+on first publish is fine), it refuses to proceed — pass `--force` to publish
+anyway when you know the drop contents are older than your working directory.
+
 ### 3. Bring up a client node
 
 On the new node, install the `tincan` binary. The fastest path is to use the
@@ -164,6 +169,9 @@ sudo tincan up
 `join --bootstrap` populates `[directory]`, `[drop.client]`, the node's
 `listen_port` (when the admin published an endpoint for it), and (if the admin
 generated it) the WireGuard keypair from the bootstrap. Nothing else to edit.
+The bootstrap also carries the directory serial current at enrollment, which
+`join` seeds as the node's rollback floor — even the first sync refuses a
+directory older than the bootstrap.
 
 If you don't have a bootstrap file, do it manually:
 

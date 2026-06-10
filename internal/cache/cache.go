@@ -44,12 +44,24 @@ func Write(stateDir string, dir directory.Directory, etag string) error {
 	if err := ensureDir(stateDir); err != nil {
 		return err
 	}
+	// The serial file is the rollback high-water mark; never lower it. The
+	// caller's rollback check happens before its fetch is verified, so a
+	// concurrent writer (daemon iteration vs. a manual `tincan sync`) could
+	// otherwise regress the mark and make an old signed blob acceptable
+	// forever. Equal serials are fine — re-applying the current directory is
+	// the steady state.
+	if prev, err := ReadSerial(stateDir); err == nil && dir.Serial < prev {
+		return fmt.Errorf("refusing to lower cached serial from %d to %d; remove %s to reset", prev, dir.Serial, config.SerialPath(stateDir))
+	}
+	// Serial before cache: a crash between the two writes must not leave a
+	// newer cache with an older high-water mark (which would re-open a
+	// one-revision rollback window). The reverse — serial N with cache N-1 —
+	// is safe because equal serials are accepted on the next fetch.
+	if err := writeSerialFile(stateDir, dir.Serial); err != nil {
+		return err
+	}
 	if err := renameio.WriteFile(config.CachePath(stateDir), payload, 0o600); err != nil {
 		return fmt.Errorf("write cache: %w", err)
-	}
-	serial := strconv.FormatUint(dir.Serial, 10) + "\n"
-	if err := renameio.WriteFile(config.SerialPath(stateDir), []byte(serial), 0o600); err != nil {
-		return fmt.Errorf("write cache serial: %w", err)
 	}
 	state := State{LastSync: time.Now().UTC(), LastETag: etag, Serial: dir.Serial}
 	stateBytes, err := json.MarshalIndent(state, "", "  ")
@@ -61,6 +73,32 @@ func Write(stateDir string, dir directory.Directory, etag string) error {
 		return fmt.Errorf("write state: %w", err)
 	}
 	return nil
+}
+
+func writeSerialFile(stateDir string, serial uint64) error {
+	data := strconv.FormatUint(serial, 10) + "\n"
+	if err := renameio.WriteFile(config.SerialPath(stateDir), []byte(data), 0o600); err != nil {
+		return fmt.Errorf("write cache serial: %w", err)
+	}
+	return nil
+}
+
+// WriteSerialFloor persists serial as the rollback high-water mark unless an
+// equal or higher one is already stored. `join` seeds a fresh node with the
+// serial current at enrollment time, so even the node's very first sync
+// refuses a directory older than its bootstrap — without it, first sync
+// trusts whatever signed blob the drop happens to serve.
+func WriteSerialFloor(stateDir string, serial uint64) error {
+	if serial == 0 {
+		return nil
+	}
+	if prev, err := ReadSerial(stateDir); err == nil && prev >= serial {
+		return nil
+	}
+	if err := ensureDir(stateDir); err != nil {
+		return err
+	}
+	return writeSerialFile(stateDir, serial)
 }
 
 func ReadSerial(stateDir string) (uint64, error) {

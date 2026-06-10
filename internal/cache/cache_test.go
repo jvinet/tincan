@@ -83,6 +83,59 @@ func TestCacheReadWrite(t *testing.T) {
 	}
 }
 
+func TestWriteRefusesLowerSerial(t *testing.T) {
+	stateDir := t.TempDir()
+	dir := sampleDir(t) // serial 42
+	if err := Write(stateDir, dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	older := dir
+	older.Serial = 41
+	if err := Write(stateDir, older, ""); err == nil {
+		t.Fatal("expected lower-serial write to be refused")
+	}
+	serial, err := ReadSerial(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serial != 42 {
+		t.Fatalf("serial=%d, want 42", serial)
+	}
+	// Equal serial stays allowed — re-applying the current directory is the
+	// steady state of every daemon iteration.
+	if err := Write(stateDir, dir, ""); err != nil {
+		t.Fatalf("equal-serial write failed: %v", err)
+	}
+}
+
+func TestWriteSerialFloor(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := WriteSerialFloor(stateDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSerial(stateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("floor 0 should not create the serial file, got %v", err)
+	}
+	if err := WriteSerialFloor(stateDir, 7); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := ReadSerial(stateDir); s != 7 {
+		t.Fatalf("serial=%d, want 7", s)
+	}
+	if err := WriteSerialFloor(stateDir, 5); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := ReadSerial(stateDir); s != 7 {
+		t.Fatalf("serial=%d, want 7 after lower floor", s)
+	}
+	if err := WriteSerialFloor(stateDir, 9); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := ReadSerial(stateDir); s != 9 {
+		t.Fatalf("serial=%d, want 9", s)
+	}
+}
+
 func TestCachePathDerivation(t *testing.T) {
 	stateDir := "/var/lib/tincan"
 	if got := config.CachePath(stateDir); got != "/var/lib/tincan/cache.bin" {

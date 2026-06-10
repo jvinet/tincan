@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
+	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/keys"
 )
@@ -98,6 +99,17 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 	}
 	if err := saveConfig(g.Config, cfg, c.FullConfig); err != nil {
 		return err
+	}
+	// Seed the rollback high-water mark with the serial current at
+	// enrollment, so the very first sync already refuses an older directory.
+	if bs != nil && bs.Serial > 0 {
+		stateDir := cfg.Sync.StateDir
+		if stateDir == "" {
+			stateDir = config.DefaultStateDir
+		}
+		if err := cache.WriteSerialFloor(stateDir, bs.Serial); err != nil {
+			return err
+		}
 	}
 	slog.Info("initialized client node", "name", nodeName, "config", g.Config, "from_bootstrap", bs != nil)
 	p := newPrinter(os.Stdout)

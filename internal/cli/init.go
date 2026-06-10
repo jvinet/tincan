@@ -103,7 +103,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 		return err
 	}
 	netbootPath := bootstrap.DefaultPath(stateDir)
-	if err := bootstrap.Write(netbootPath, bootstrap.Network(&cfg)); err != nil {
+	if err := bootstrap.Write(netbootPath, bootstrap.Network(&cfg, dir.Serial)); err != nil {
 		return err
 	}
 	slog.Info("initialized admin node", "name", c.Name, "config", g.Config, "tunnel_ip", tunnelIP, "drop_type", c.DropType, "network_cidr", c.CIDR)

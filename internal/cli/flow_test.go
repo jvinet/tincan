@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
+	"github.com/jvinet/tincan/internal/drop"
 	"github.com/jvinet/tincan/internal/keys"
 	"github.com/jvinet/tincan/test/fakedrop"
 )
@@ -77,6 +79,57 @@ func TestFetchSyncDirectoryRejectsRollback(t *testing.T) {
 	_, _, _, err = fetchSyncDirectory(context.Background(), cfg, fd, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "stale serial") {
 		t.Fatalf("expected stale serial error, got %v", err)
+	}
+}
+
+// A corrupt serial file must fail the sync, not silently disable rollback
+// protection: cache.Write would persist the fetched serial as the new
+// high-water mark, making an attacker-served rollback durable.
+func TestFetchSyncDirectoryFailsClosedOnCorruptSerial(t *testing.T) {
+	cfg, dir := testFlowConfigAndDirectory(t, 5)
+	blob, err := directory.Seal(dir, cfg.Directory.NetworkIdentity, cfg.Directory.PublisherKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.SerialPath(cfg.Sync.StateDir), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fd := &fakedrop.Drop{Data: blob}
+	_, _, _, err = fetchSyncDirectory(context.Background(), cfg, fd, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "rollback protection") {
+		t.Fatalf("expected fail-closed error, got %v", err)
+	}
+}
+
+func TestReconcilePublishSerialAdoptsNewerRemote(t *testing.T) {
+	source := directory.Directory{Serial: 3}
+	if err := reconcilePublishSerial(&source, directory.Directory{Serial: 9}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if source.Serial != 9 {
+		t.Fatalf("serial=%d, want 9", source.Serial)
+	}
+}
+
+func TestReconcilePublishSerialMissingRemoteProceeds(t *testing.T) {
+	// First publish: nothing at the drop yet must not require --force.
+	source := directory.Directory{Serial: 3}
+	if err := reconcilePublishSerial(&source, directory.Directory{}, drop.ErrNotFound, false); err != nil {
+		t.Fatal(err)
+	}
+	if source.Serial != 3 {
+		t.Fatalf("serial=%d, want 3", source.Serial)
+	}
+}
+
+func TestReconcilePublishSerialRefusesOnFetchFailure(t *testing.T) {
+	source := directory.Directory{Serial: 3}
+	err := reconcilePublishSerial(&source, directory.Directory{}, errors.New("offline"), false)
+	if err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("expected refusal pointing at --force, got %v", err)
+	}
+	if err := reconcilePublishSerial(&source, directory.Directory{}, errors.New("offline"), true); err != nil {
+		t.Fatalf("forced publish should proceed, got %v", err)
 	}
 }
 

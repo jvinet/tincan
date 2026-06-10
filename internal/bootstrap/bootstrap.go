@@ -13,10 +13,14 @@ import (
 const SchemaVersion = 1
 
 type Bootstrap struct {
-	SchemaVersion int                `json:"schema_version"`
-	Directory     Directory          `json:"directory"`
-	Drop          config.DropBackend `json:"drop"`
-	Node          *Node              `json:"node,omitempty"`
+	SchemaVersion int       `json:"schema_version"`
+	Directory     Directory `json:"directory"`
+	// Serial is the directory serial current when the bootstrap was written.
+	// `join` seeds the new node's rollback high-water mark with it, so even
+	// the node's first sync refuses a directory older than its enrollment.
+	Serial uint64             `json:"serial,omitempty"`
+	Drop   config.DropBackend `json:"drop"`
+	Node   *Node              `json:"node,omitempty"`
 }
 
 type Directory struct {
@@ -36,14 +40,15 @@ type Node struct {
 	PrivateKey string `json:"private_key,omitempty"`
 }
 
-func Network(cfg *config.Config) Bootstrap {
+func Network(cfg *config.Config, serial uint64) Bootstrap {
 	return Bootstrap{
 		SchemaVersion: SchemaVersion,
 		Directory: Directory{
 			NetworkIdentity: cfg.Directory.NetworkIdentity,
 			PublisherPubKey: cfg.Directory.PublisherPubKey,
 		},
-		Drop: cfg.Drop.Client,
+		Serial: serial,
+		Drop:   cfg.Drop.Client,
 	}
 }
 

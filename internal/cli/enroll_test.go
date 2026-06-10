@@ -41,7 +41,7 @@ func enroll(t *testing.T, endpoint string) (bootstrap.Bootstrap, *config.Config)
 	clientCfg := filepath.Join(t.TempDir(), "client.toml")
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"-c", clientCfg, "join", "--bootstrap", bsPath}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"-c", clientCfg, "join", "--bootstrap", bsPath, "--state-dir", t.TempDir()}, &stdout, &stderr); code != 0 {
 		t.Fatalf("join exit=%d; stderr=%q", code, stderr.String())
 	}
 	cfg, err := config.Load(clientCfg)
@@ -79,6 +79,23 @@ func TestEnrollWithoutEndpointLeavesListenPortUnset(t *testing.T) {
 	}
 	if cfg.Wireguard.ListenPort != 0 {
 		t.Fatalf("joined config listen port=%d, want 0", cfg.Wireguard.ListenPort)
+	}
+}
+
+// The bootstrap carries the directory serial current at enrollment, and join
+// must seed the client's rollback high-water mark with it — otherwise the
+// node's first sync would accept an arbitrarily old signed directory.
+func TestEnrollSeedsSerialFloor(t *testing.T) {
+	bs, cfg := enroll(t, "")
+	if bs.Serial != 1 {
+		t.Fatalf("bootstrap serial=%d, want 1", bs.Serial)
+	}
+	serial, err := cache.ReadSerial(cfg.Sync.StateDir)
+	if err != nil {
+		t.Fatalf("read seeded serial: %v", err)
+	}
+	if serial != bs.Serial {
+		t.Fatalf("seeded serial=%d, want %d", serial, bs.Serial)
 	}
 }
 

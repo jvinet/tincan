@@ -140,7 +140,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 			PublicKey:  publicKey,
 			PrivateKey: generatedPrivateKey,
 		}
-		if err := bootstrap.Write(c.Bootstrap, bootstrap.WithNode(bootstrap.Network(cfg), node)); err != nil {
+		if err := bootstrap.Write(c.Bootstrap, bootstrap.WithNode(bootstrap.Network(cfg, dir.Serial), node)); err != nil {
 			return err
 		}
 	}

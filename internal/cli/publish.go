@@ -2,15 +2,19 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
+	"github.com/jvinet/tincan/internal/drop"
 )
 
-type PublishCmd struct{}
+type PublishCmd struct {
+	Force bool `help:"Publish even when the current remote directory cannot be fetched first."`
+}
 
 func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	cfg, err := loadConfig(g)
@@ -29,12 +33,18 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 		return fmt.Errorf("read working directory: %w", err)
 	}
 	p := newPrinter(os.Stdout)
-	remote, err := fetchDirectory(ctx, cfg, d)
-	if err == nil && remote.Serial >= source.Serial {
-		source.Serial = remote.Serial
-	} else if err != nil {
-		slog.Warn("failed to fetch remote directory before publish", "error", err)
-		p.fail("failed to fetch remote directory before publish; %v", err)
+	remote, fetchErr := fetchDirectory(ctx, cfg, d)
+	if err := reconcilePublishSerial(&source, remote, fetchErr, c.Force); err != nil {
+		slog.Error("publish refused", "error", err)
+		return err
+	}
+	switch {
+	case fetchErr == nil:
+	case errors.Is(fetchErr, drop.ErrNotFound):
+		p.hint("no directory at the drop yet; publishing the first one")
+	default: // forced past a fetch failure
+		slog.Warn("publishing without the remote serial check", "error", fetchErr)
+		p.warn("publishing without the remote serial check (--force); %v", fetchErr)
 	}
 	if err := bumpDirectory(&source); err != nil {
 		return err

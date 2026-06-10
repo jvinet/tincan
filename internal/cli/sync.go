@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -93,8 +94,20 @@ func fetchSyncDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, ti
 	if err != nil {
 		return directory.Directory{}, false, nil, err
 	}
-	if cachedSerial, err := cache.ReadSerial(cfg.Sync.StateDir); err == nil && directory.IsRollback(dir.Serial, cachedSerial) {
-		return directory.Directory{}, false, nil, fmt.Errorf("stale serial %d is older than cached serial %d", dir.Serial, cachedSerial)
+	cachedSerial, serialErr := cache.ReadSerial(cfg.Sync.StateDir)
+	switch {
+	case serialErr == nil:
+		if directory.IsRollback(dir.Serial, cachedSerial) {
+			return directory.Directory{}, false, nil, fmt.Errorf("stale serial %d is older than cached serial %d", dir.Serial, cachedSerial)
+		}
+	case errors.Is(serialErr, os.ErrNotExist):
+		// First sync on a fresh node: no high-water mark yet. (`join` seeds
+		// one from the bootstrap, so this branch is normally never taken on
+		// bootstrapped nodes.)
+	default:
+		// Fail closed: a corrupt or unreadable serial file must not silently
+		// disable rollback protection.
+		return directory.Directory{}, false, nil, fmt.Errorf("cache serial unreadable (%v); refusing to sync without rollback protection — remove %s to re-seed it from the next accepted directory", serialErr, config.SerialPath(cfg.Sync.StateDir))
 	}
 	return dir, false, nil, nil
 }

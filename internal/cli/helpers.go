@@ -66,6 +66,31 @@ func fetchAdminDirectory(ctx context.Context, cfg *config.Config, d drop.Drop) (
 	return directory.Directory{}, err
 }
 
+// reconcilePublishSerial adopts the remote directory's serial when it is
+// ahead of the local working copy, so the caller's subsequent bump always
+// yields a serial that has never been published. When the remote cannot be
+// read, the local copy may be behind the drop (an observation republish from
+// the daemon, a restore from backup), and bumping it would sign a second,
+// different payload under an already-used serial — anyone holding both
+// signed blobs could then flip clients between the two states forever.
+// Refuse in that case unless forced. A missing remote object is the normal
+// first-publish case and proceeds.
+func reconcilePublishSerial(source *directory.Directory, remote directory.Directory, fetchErr error, force bool) error {
+	switch {
+	case fetchErr == nil:
+		if remote.Serial >= source.Serial {
+			source.Serial = remote.Serial
+		}
+		return nil
+	case errors.Is(fetchErr, drop.ErrNotFound):
+		return nil
+	case force:
+		return nil
+	default:
+		return fmt.Errorf("cannot fetch the published directory before publishing (%v); the local working copy may be behind it, and re-publishing could reuse an already-published serial — fix the drop or pass --force", fetchErr)
+	}
+}
+
 func publishDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir directory.Directory, writeSource bool) error {
 	blob, err := directory.Seal(dir, cfg.Directory.NetworkIdentity, cfg.Directory.PublisherKey)
 	if err != nil {
@@ -82,7 +107,7 @@ func publishDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir 
 			return err
 		}
 	}
-	if err := bootstrap.Write(bootstrap.DefaultPath(cfg.Sync.StateDir), bootstrap.Network(cfg)); err != nil {
+	if err := bootstrap.Write(bootstrap.DefaultPath(cfg.Sync.StateDir), bootstrap.Network(cfg, dir.Serial)); err != nil {
 		return err
 	}
 	return nil
