@@ -1,3 +1,8 @@
 bin/
 *.test
 coverage.out
+
+# Local operator state — live credentials, never commit.
+keys/
+node.json
+log.md
