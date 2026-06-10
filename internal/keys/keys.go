@@ -44,6 +44,28 @@ func ParseWGPrivate(key string) (wgtypes.Key, error) {
 	return parsed, nil
 }
 
+// WGKeyToBytes decodes a base64 WireGuard key (public or pre-shared) into its
+// raw 32 bytes, for compact serialization. WGKeyFromBytes is the inverse.
+func WGKeyToBytes(key string) ([]byte, error) {
+	parsed, err := wgtypes.ParseKey(strings.TrimSpace(key))
+	if err != nil {
+		return nil, fmt.Errorf("decode WireGuard key: %w", err)
+	}
+	out := make([]byte, len(parsed))
+	copy(out, parsed[:])
+	return out, nil
+}
+
+// WGKeyFromBytes renders a raw 32-byte WireGuard key as the canonical base64
+// string used throughout tincan. It errors if raw is not exactly 32 bytes.
+func WGKeyFromBytes(raw []byte) (string, error) {
+	key, err := wgtypes.NewKey(raw)
+	if err != nil {
+		return "", fmt.Errorf("encode WireGuard key: %w", err)
+	}
+	return key.String(), nil
+}
+
 func GenerateAgeIdentity() (identity string, recipient string, err error) {
 	id, err := age.GenerateX25519Identity()
 	if err != nil {

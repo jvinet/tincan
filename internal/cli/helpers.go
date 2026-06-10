@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
 	"github.com/jvinet/tincan/internal/cache"
@@ -94,7 +93,7 @@ func bumpDirectory(dir *directory.Directory) error {
 		return errors.New("directory serial overflow")
 	}
 	dir.Serial++
-	dir.CreatedAt = time.Now().UTC()
+	dir.CreatedAt = directory.Stamp()
 	return nil
 }
 

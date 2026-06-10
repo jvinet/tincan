@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/jvinet/tincan/internal/admin"
 	"github.com/jvinet/tincan/internal/bootstrap"
@@ -88,7 +87,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	dir := directory.Directory{
 		SchemaVersion: directory.SchemaVersion,
 		Serial:        1,
-		CreatedAt:     time.Now().UTC(),
+		CreatedAt:     directory.Stamp(),
 		NetworkCIDR:   c.CIDR,
 		Nodes: []directory.Node{{
 			Name:      c.Name,

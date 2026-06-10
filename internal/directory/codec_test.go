@@ -1,6 +1,7 @@
 package directory
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -158,6 +159,134 @@ func TestSealRejectsInvalidDirectory(t *testing.T) {
 
 	if _, err := Seal(dir, identity, publisherPriv); err == nil {
 		t.Fatal("expected invalid directory to fail sealing")
+	}
+}
+
+func TestStampIsSecondPrecisionUTC(t *testing.T) {
+	s := Stamp()
+	if s.Nanosecond() != 0 {
+		t.Fatalf("Stamp() has sub-second precision: %d ns", s.Nanosecond())
+	}
+	if s.Location() != time.UTC {
+		t.Fatalf("Stamp() not UTC: %s", s.Location())
+	}
+}
+
+func TestMarshalPlainDefaultsToSecondPrecision(t *testing.T) {
+	dir := sampleDirectory(t)
+	dir.CreatedAt = time.Time{} // force the IsZero default-stamp path
+	blob, err := MarshalPlain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := UnmarshalPlain(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Fatal("CreatedAt was not stamped")
+	}
+	if got.CreatedAt.Nanosecond() != 0 {
+		t.Fatalf("stamped CreatedAt has sub-second precision: %d ns", got.CreatedAt.Nanosecond())
+	}
+}
+
+func TestMarshalPlainTimestampIsCompact(t *testing.T) {
+	dir := sampleDirectory(t) // CreatedAt is already whole-second
+	whole, err := MarshalPlain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := cloneDirectory(dir)
+	sub.CreatedAt = sub.CreatedAt.Add(time.Nanosecond)
+	subBlob, err := MarshalPlain(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// msgpack stores a whole-second time.Time as a 6-byte timestamp32 extension
+	// and a sub-second one as a 10-byte timestamp64. That 4-byte gap is the
+	// saving Stamp() keeps CreatedAt/ObservedAt at; guard it against a msgpack
+	// change or a dropped Truncate.
+	if delta := len(subBlob) - len(whole); delta != 4 {
+		t.Fatalf("expected whole-second timestamp to save 4 bytes, got delta %d (%d vs %d)", delta, len(whole), len(subBlob))
+	}
+}
+
+func TestNodeWireRoundTrip(t *testing.T) {
+	_, pub, err := keys.GenerateWGKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, psk, err := keys.GenerateWGKeypair() // a PSK is also a 32-byte WG key
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []Node{
+		{Name: "minimal", PublicKey: pub, TunnelIP: "10.42.0.9"},
+		{Name: "full", PublicKey: pub, TunnelIP: "10.42.0.250",
+			Endpoint: "host.example:51820", ObservedEndpoint: "203.0.113.7:7000",
+			ObservedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC), PSK: psk},
+	}
+	for _, want := range cases {
+		t.Run(want.Name, func(t *testing.T) {
+			w, err := want.toWire()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got Node
+			if err := got.fromWire(w); err != nil {
+				t.Fatal(err)
+			}
+			if got != want { // pure struct copy, so exact equality (incl. ObservedAt) holds
+				t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestNodeEncodedAsRawBytes(t *testing.T) {
+	dir := sampleDirectory(t)
+	payload, err := MarshalPlain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range dir.Nodes {
+		raw, err := keys.WGKeyToBytes(n.PublicKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(payload, raw) {
+			t.Fatalf("node %q raw public key not found in payload", n.Name)
+		}
+		if bytes.Contains(payload, []byte(n.PublicKey)) {
+			t.Fatalf("node %q base64 public key leaked into payload (not stored raw)", n.Name)
+		}
+	}
+}
+
+func TestFromWireRejectsMalformed(t *testing.T) {
+	_, pub, err := keys.GenerateWGKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawKey, err := keys.WGKeyToBytes(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		w    wireNode
+	}{
+		{name: "short ip", w: wireNode{Name: "n", PublicKey: rawKey, TunnelIP: []byte{10, 42, 0}}},
+		{name: "short key", w: wireNode{Name: "n", PublicKey: []byte{1, 2, 3}, TunnelIP: []byte{10, 42, 0, 1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var n Node
+			if err := n.fromWire(tc.w); err == nil {
+				t.Fatal("expected decode error, got nil")
+			}
+		})
 	}
 }
 

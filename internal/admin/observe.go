@@ -41,7 +41,8 @@ func MergeObservations(dir directory.Directory, peers []wgtypes.Peer, now time.T
 	out := dir
 	out.Nodes = append([]directory.Node(nil), dir.Nodes...)
 	changed := false
-	nowUTC := now.UTC()
+	// Second precision to match directory.Stamp(); see its doc for why.
+	nowUTC := now.UTC().Truncate(time.Second)
 
 	for i := range out.Nodes {
 		n := &out.Nodes[i]

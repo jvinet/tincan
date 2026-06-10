@@ -14,10 +14,22 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
+// Stamp returns the current time at the precision directory timestamps are
+// persisted with: whole seconds, in UTC. msgpack encodes a second-precision
+// time.Time as a 6-byte timestamp32 extension, versus the 10-byte timestamp64
+// it must use once sub-second digits are present. Nothing in tincan reads
+// sub-second precision off these fields — Serial (not CreatedAt) is the
+// freshness signal, and ObservedAt is only ever displayed rounded — so every
+// CreatedAt/ObservedAt write goes through this to keep them at the compact
+// width. Do not "tidy" the Truncate away.
+func Stamp() time.Time {
+	return time.Now().UTC().Truncate(time.Second)
+}
+
 func MarshalPlain(dir Directory) ([]byte, error) {
 	dir.SchemaVersion = SchemaVersion
 	if dir.CreatedAt.IsZero() {
-		dir.CreatedAt = time.Now().UTC()
+		dir.CreatedAt = Stamp()
 	} else {
 		dir.CreatedAt = dir.CreatedAt.UTC()
 	}
@@ -36,6 +48,98 @@ func UnmarshalPlain(data []byte) (Directory, error) {
 		return Directory{}, err
 	}
 	return dir, nil
+}
+
+// wireNode is the on-the-wire form of Node. It differs only in that key
+// material and the tunnel IP are stored as raw bytes instead of the base64 /
+// dotted-decimal strings Node carries in memory: a WireGuard key is 32 bytes
+// (~34 on the wire) versus 44 base64 chars (~46), and an IPv4 address is 4
+// bytes versus a ~10-char string — about 16 bytes/node off the sealed
+// directory. Node converts to and from this form in its msgpack hooks, so the
+// rest of tincan keeps working with the string fields. The msgpack tags
+// (names + omitempty) match Node's exactly, preserving the field-omission
+// behavior; only pk/ip/psk change representation.
+type wireNode struct {
+	Name             string    `msgpack:"n"`
+	PublicKey        []byte    `msgpack:"pk"`
+	TunnelIP         []byte    `msgpack:"ip"`
+	Endpoint         string    `msgpack:"ep,omitempty"`
+	ObservedEndpoint string    `msgpack:"oep,omitempty"`
+	ObservedAt       time.Time `msgpack:"oat,omitempty"`
+	PSK              []byte    `msgpack:"psk,omitempty"`
+}
+
+// EncodeMsgpack implements msgpack.CustomEncoder so every Node is written in
+// the compact wireNode form. msgpack.Marshal invokes it per element of
+// Directory.Nodes; DecodeMsgpack is the inverse.
+func (n Node) EncodeMsgpack(enc *msgpack.Encoder) error {
+	w, err := n.toWire()
+	if err != nil {
+		return err
+	}
+	return enc.Encode(w)
+}
+
+func (n *Node) DecodeMsgpack(dec *msgpack.Decoder) error {
+	var w wireNode
+	if err := dec.Decode(&w); err != nil {
+		return err
+	}
+	return n.fromWire(w)
+}
+
+func (n Node) toWire() (wireNode, error) {
+	pk, err := keys.WGKeyToBytes(n.PublicKey)
+	if err != nil {
+		return wireNode{}, fmt.Errorf("encode node %q: %w", n.Name, err)
+	}
+	ip, err := netip.ParseAddr(n.TunnelIP)
+	if err != nil || !ip.Is4() {
+		return wireNode{}, fmt.Errorf("encode node %q: tunnel IP %q is not IPv4", n.Name, n.TunnelIP)
+	}
+	ip4 := ip.As4()
+	w := wireNode{
+		Name:             n.Name,
+		PublicKey:        pk,
+		TunnelIP:         ip4[:],
+		Endpoint:         n.Endpoint,
+		ObservedEndpoint: n.ObservedEndpoint,
+		ObservedAt:       n.ObservedAt,
+	}
+	if n.PSK != "" {
+		psk, err := keys.WGKeyToBytes(n.PSK)
+		if err != nil {
+			return wireNode{}, fmt.Errorf("encode node %q PSK: %w", n.Name, err)
+		}
+		w.PSK = psk
+	}
+	return w, nil
+}
+
+func (n *Node) fromWire(w wireNode) error {
+	pk, err := keys.WGKeyFromBytes(w.PublicKey)
+	if err != nil {
+		return fmt.Errorf("decode node %q: %w", w.Name, err)
+	}
+	if len(w.TunnelIP) != 4 {
+		return fmt.Errorf("decode node %q: tunnel IP is %d bytes, want 4", w.Name, len(w.TunnelIP))
+	}
+	ip4 := [4]byte{w.TunnelIP[0], w.TunnelIP[1], w.TunnelIP[2], w.TunnelIP[3]}
+	n.Name = w.Name
+	n.PublicKey = pk
+	n.TunnelIP = netip.AddrFrom4(ip4).String()
+	n.Endpoint = w.Endpoint
+	n.ObservedEndpoint = w.ObservedEndpoint
+	n.ObservedAt = w.ObservedAt
+	n.PSK = ""
+	if len(w.PSK) > 0 {
+		psk, err := keys.WGKeyFromBytes(w.PSK)
+		if err != nil {
+			return fmt.Errorf("decode node %q PSK: %w", w.Name, err)
+		}
+		n.PSK = psk
+	}
+	return nil
 }
 
 func Seal(dir Directory, networkIdentity string, publisherPrivateKey string) ([]byte, error) {
