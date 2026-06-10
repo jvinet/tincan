@@ -46,6 +46,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		kong.BindTo(context.Background(), (*context.Context)(nil)),
 		kong.UsageOnError(),
 		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
+		kong.Groups{
+			"tincanclient": "Tincan-client flags (--client-type=tincan):",
+			"wgclient":     "WireGuard-client flags (--client-type=wireguard):",
+		},
 	)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

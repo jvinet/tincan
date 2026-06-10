@@ -204,7 +204,40 @@ sudo tincan down           # tear the interface down
 sudo tincan down --stop    # tear the interface down and stop the daemon too
 ```
 
-### 4. Verify
+### 4. Enroll a plain WireGuard client (mobile / QR)
+
+A phone or any device running the native WireGuard app can join without the
+Tincan binary. Pass `--client-type=wireguard` and `add-node` generates the
+keypair, allocates a tunnel IP, and produces a standard `wg-quick` config as one
+or more enrollment artifacts (pick at least one):
+
+```sh
+# scan straight off the terminal
+sudo tincan add-node --name phone --client-type=wireguard --wg-qr
+# or write a PNG to send, and/or a plain .conf file
+sudo tincan add-node --name phone --client-type=wireguard \
+  --wg-qr-png phone.png --wg-config phone.conf
+```
+
+(The default `--client-type=tincan` is the agent-running client from step 2,
+where `--bootstrap` applies; the two flag sets are mutually exclusive and
+`add-node --help` lists them in separate sections.)
+
+These are **hub-and-spoke**: the client peers with one node that has a public
+`--endpoint` and routes the whole network CIDR through it (add an endpoint-bearing
+node first, or you'll get an error). It's a point-in-time snapshot — the device
+doesn't run Tincan, so it won't pick up later directory changes (rotated keys,
+moved endpoints, new nodes); re-run to refresh it.
+
+With `--wg-qr` the QR code is the only thing written to stdout, so you can
+redirect it: `... --wg-qr >phone.txt`. That text round-trips only when
+re-rendered in a real terminal (`cat phone.txt`) — pasted into chat or webmail
+the line spacing breaks it, so prefer `--wg-qr-png` (or `--wg-config`) for
+anything you transmit. Every artifact embeds the node's **private key** (the
+files are written `0600`): treat them as secrets and remove them once the device
+is enrolled.
+
+### 5. Verify
 
 ```sh
 sudo tincan status

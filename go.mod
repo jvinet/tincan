@@ -8,6 +8,7 @@ require (
 	github.com/google/renameio/v2 v2.0.0
 	github.com/minio/minio-go/v7 v7.0.95
 	github.com/pelletier/go-toml/v2 v2.3.1
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/net v0.48.0
