@@ -51,32 +51,35 @@ type DropConfig struct {
 	Client DropBackend `toml:"client"`
 }
 
+// The json tags mirror the toml names (and all carry omitempty) so the bootstrap
+// file written by `init`/`add-node` stays compact — only the fields a given drop
+// type actually uses are emitted, with the same key names as the [drop] config.
 type DropBackend struct {
-	Type string `toml:"type"`
+	Type string `toml:"type" json:"type"`
 
-	Endpoint  string `toml:"endpoint,omitempty"`
-	Region    string `toml:"region,omitempty"`
-	Bucket    string `toml:"bucket,omitempty"`
-	ObjectKey string `toml:"object_key,omitempty"`
-	AccessKey string `toml:"access_key,omitempty"`
-	SecretKey string `toml:"secret_key,omitempty"`
-	TLS       *bool  `toml:"tls,omitempty"`
+	Endpoint  string `toml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	Region    string `toml:"region,omitempty" json:"region,omitempty"`
+	Bucket    string `toml:"bucket,omitempty" json:"bucket,omitempty"`
+	ObjectKey string `toml:"object_key,omitempty" json:"object_key,omitempty"`
+	AccessKey string `toml:"access_key,omitempty" json:"access_key,omitempty"`
+	SecretKey string `toml:"secret_key,omitempty" json:"secret_key,omitempty"`
+	TLS       *bool  `toml:"tls,omitempty" json:"tls,omitempty"`
 
-	URL      string `toml:"url,omitempty"`
-	Username string `toml:"username,omitempty"`
-	Password string `toml:"password,omitempty"`
+	URL      string `toml:"url,omitempty" json:"url,omitempty"`
+	Username string `toml:"username,omitempty" json:"username,omitempty"`
+	Password string `toml:"password,omitempty" json:"password,omitempty"`
 
-	Path string `toml:"path,omitempty"`
+	Path string `toml:"path,omitempty" json:"path,omitempty"`
 
 	// DNS-specific fields. Provider and APIToken are needed only on the write
 	// (admin) side; clients read the zone with a plain DNS lookup using just
 	// Zone and RecordName.
-	Provider   string `toml:"provider,omitempty"`
-	Zone       string `toml:"zone,omitempty"`
-	RecordName string `toml:"record_name,omitempty"`
-	APIToken   string `toml:"api_token,omitempty"`
-	TTL        int    `toml:"ttl,omitempty"`
-	Resolver   string `toml:"resolver,omitempty"`
+	Provider   string `toml:"provider,omitempty" json:"provider,omitempty"`
+	Zone       string `toml:"zone,omitempty" json:"zone,omitempty"`
+	RecordName string `toml:"record_name,omitempty" json:"record_name,omitempty"`
+	APIToken   string `toml:"api_token,omitempty" json:"api_token,omitempty"`
+	TTL        int    `toml:"ttl,omitempty" json:"ttl,omitempty"`
+	Resolver   string `toml:"resolver,omitempty" json:"resolver,omitempty"`
 }
 
 func (c Config) ReadDrop() DropBackend {
