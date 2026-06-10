@@ -65,12 +65,25 @@ func Start(ctx context.Context, cfg Config, dir DirectorySource, wakeCh chan<- s
 	if err != nil {
 		return nil, fmt.Errorf("enumerate interfaces: %w", err)
 	}
+	// Goroutines spawned below run on this derived context. If a later start
+	// step fails, cancel it so already-spawned listeners don't leak as live
+	// sockets feeding a store nobody reads. On success the context lives
+	// until the caller's ctx is canceled.
+	runCtx, cancel := context.WithCancel(ctx)
+	started := false
+	defer func() {
+		if !started {
+			cancel()
+		}
+	}()
+
 	reactCh := make(chan struct{}, 1)
-	if err := startListeners(ctx, cfg, ipv4Addr, ipv6Addr, ifaces, store, dir, wakeCh, reactCh); err != nil {
+	if err := startListeners(runCtx, cfg, ipv4Addr, ipv6Addr, ifaces, store, dir, wakeCh, reactCh); err != nil {
 		return nil, fmt.Errorf("start listeners: %w", err)
 	}
-	if err := startSender(ctx, cfg, ipv4Addr, ipv6Addr, cfg.InterfaceFilter, store, reactCh); err != nil {
+	if err := startSender(runCtx, cfg, ipv4Addr, ipv6Addr, cfg.InterfaceFilter, store, reactCh); err != nil {
 		return nil, fmt.Errorf("start sender: %w", err)
 	}
+	started = true
 	return store, nil
 }

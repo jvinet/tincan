@@ -14,9 +14,22 @@ type LANState struct {
 	// LearnedAt is when the most recent beacon arrived.
 	LearnedAt time.Time `json:"learned_at,omitzero"`
 	// FailedAt is the most recent time we observed a DIRECT→RELAYED transition
-	// for this peer. When FailedAt is newer than LearnedAt, the entry is
-	// considered blacklisted until a fresh beacon arrives.
+	// for this peer. Informational; the blacklist is keyed on FailedEndpoint.
 	FailedAt time.Time `json:"failed_at,omitzero"`
+	// FailedEndpoint is the Endpoint value that was marked failed. While it
+	// equals Endpoint the entry is blacklisted: a beacon repeating that same
+	// address does not resurrect it (a beacon is unauthenticated, so a
+	// spoofed flood otherwise re-validates a dead path indefinitely — see
+	// spec/lan-discovery.md § Security considerations). Only a beacon
+	// advertising a *different* endpoint clears the failure, since that is a
+	// genuinely new candidate worth a probe.
+	FailedEndpoint string `json:"failed_endpoint,omitempty"`
+}
+
+// Blacklisted reports whether the current Endpoint is the one that was marked
+// failed and not yet superseded by a different candidate.
+func (s LANState) Blacklisted() bool {
+	return s.Endpoint != "" && s.FailedEndpoint == s.Endpoint
 }
 
 // Usable reports whether the entry can be presented as an endpoint candidate
@@ -28,7 +41,7 @@ func (s LANState) Usable(now time.Time, ttl time.Duration) bool {
 	if now.Sub(s.LearnedAt) > ttl {
 		return false
 	}
-	if !s.FailedAt.IsZero() && !s.FailedAt.Before(s.LearnedAt) {
+	if s.Blacklisted() {
 		return false
 	}
 	return true
@@ -108,32 +121,50 @@ type UpdateResult struct {
 	FirstSeen bool
 }
 
-// Update inserts or refreshes a peer entry.
+// Update inserts or refreshes a peer entry. Beacons are unauthenticated, so
+// Update is deliberately conservative about *changing* a known endpoint:
+//
+//   - First beacon for a pubkey: learn it.
+//   - Same endpoint as stored: refresh liveness only. A repeat never clears a
+//     failure for that same endpoint — otherwise a spoofed beacon flood could
+//     keep resurrecting a dead path.
+//   - Different endpoint while the current one is still usable: reject (pin).
+//     An unsolicited beacon cannot displace a working/valid endpoint; the
+//     incumbent must fail (MarkFailed) or age out (TTL) first. This bounds a
+//     LAN attacker to the same ~90s blast radius a single spoofed beacon
+//     already has, instead of letting a flood hold a peer hostage.
+//   - Different endpoint while the current one is stale or failed: accept it
+//     as a fresh candidate and clear the failure.
+//
+// Same-NAT peers are unaffected by the blacklist: chooseEndpoint looks them
+// up with staleOK, bypassing Usable entirely, so their recovery path is
+// unchanged.
 func (s *Store) Update(pubkey, endpoint string, now time.Time) UpdateResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prev, hadPrev := s.entries[pubkey]
-	next := LANState{
-		Endpoint:  endpoint,
-		LearnedAt: now,
-		FailedAt:  prev.FailedAt,
-	}
-	s.entries[pubkey] = next
 	if !hadPrev {
+		s.entries[pubkey] = LANState{Endpoint: endpoint, LearnedAt: now}
 		return UpdateResult{Changed: true, FirstSeen: true}
 	}
-	if prev.Endpoint != endpoint {
-		return UpdateResult{Changed: true}
+	if endpoint == prev.Endpoint {
+		// Refresh liveness; preserve any failure on this same endpoint.
+		next := prev
+		next.LearnedAt = now
+		s.entries[pubkey] = next
+		return UpdateResult{}
 	}
-	if !prev.FailedAt.IsZero() && prev.FailedAt.After(prev.LearnedAt) {
-		return UpdateResult{Changed: true}
+	if prev.Usable(now, s.ttl) {
+		return UpdateResult{} // pinned: don't let an unsolicited beacon move it
 	}
-	return UpdateResult{}
+	// Incumbent is stale or failed — the new endpoint is a fresh candidate.
+	s.entries[pubkey] = LANState{Endpoint: endpoint, LearnedAt: now}
+	return UpdateResult{Changed: true}
 }
 
-// MarkFailed records that the peer's LAN endpoint just failed (the relay
-// state machine observed a DIRECT→RELAYED transition). The entry stays
-// blacklisted until the next beacon arrives.
+// MarkFailed records that the peer's current LAN endpoint just failed (the
+// relay state machine observed a DIRECT→RELAYED transition). That specific
+// endpoint stays blacklisted until a beacon advertises a different one.
 func (s *Store) MarkFailed(pubkey string, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,7 +173,28 @@ func (s *Store) MarkFailed(pubkey string, now time.Time) {
 		return
 	}
 	entry.FailedAt = now
+	entry.FailedEndpoint = entry.Endpoint
 	s.entries[pubkey] = entry
+}
+
+// GC removes entries not refreshed within maxAge and entries whose pubkey is
+// no longer a directory member. The listener already gates inserts on
+// membership, so a removed node's beacons are dropped and its entry simply
+// ages out; this also reclaims it immediately once the directory drops it.
+// Returns the number of entries removed.
+func (s *Store) GC(now time.Time, maxAge time.Duration, members map[string]bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := 0
+	for pubkey, entry := range s.entries {
+		stale := !entry.LearnedAt.IsZero() && now.Sub(entry.LearnedAt) > maxAge
+		gone := members != nil && !members[pubkey]
+		if stale || gone {
+			delete(s.entries, pubkey)
+			removed++
+		}
+	}
+	return removed
 }
 
 // Snapshot returns a copy of the current store contents. Safe for use by

@@ -158,36 +158,71 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 		if cfg != nil {
 			interval = cfg.Sync.Interval.Or(config.DefaultInterval)
 		}
-		timer := time.NewTimer(interval)
+		proceed, err := waitForReconcile(ctx, sigCh, wakeCh, interval, minWakeInterval, time.Now(), pout)
+		if !proceed {
+			return err
+		}
+	}
+}
+
+// minWakeInterval is the minimum spacing between wake-triggered reconciles.
+// A wake nudges the daemon to reconverge immediately, but each reconcile does
+// a drop fetch and a netlink reconfigure; without this floor a beacon storm
+// (or a dual-homed peer whose endpoint flaps) could drive back-to-back
+// fetches. SIGHUP and the regular interval are never debounced.
+const minWakeInterval = 10 * time.Second
+
+// waitForReconcile blocks until the daemon should reconcile again — the sync
+// interval elapsed, a SIGHUP arrived, or a wake fired (debounced to at most
+// one per minWakeInterval). It returns proceed=false with the error the
+// daemon loop should return (nil for a clean shutdown signal).
+func waitForReconcile(ctx context.Context, sigCh <-chan os.Signal, wakeCh <-chan string, interval, minWake time.Duration, lastReconcile time.Time, p *printer) (bool, error) {
+	intervalDeadline := lastReconcile.Add(interval)
+	timer := time.NewTimer(time.Until(intervalDeadline))
+	defer timer.Stop()
+	var wakePending bool
+	for {
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
 			slog.Info("daemon loop exiting", "reason", "context canceled")
-			return ctx.Err()
+			return false, ctx.Err()
 		case sig := <-sigCh:
-			if !timer.Stop() {
-				<-timer.C
-			}
 			switch sig {
 			case syscall.SIGHUP:
 				slog.Info("received SIGHUP, reloading config and reconciling")
-				pout.hint("received SIGHUP, reloading config and reconciling")
-				continue
+				p.hint("received SIGHUP, reloading config and reconciling")
+				return true, nil
 			case syscall.SIGTERM, syscall.SIGINT:
 				slog.Info("received shutdown signal", "signal", sig.String())
-				pout.hint("received shutdown signal (%s)", sig.String())
-				return nil
+				p.hint("received shutdown signal (%s)", sig.String())
+				return false, nil
 			}
 		case reason := <-wakeCh:
-			if !timer.Stop() {
-				<-timer.C
+			wakeDeadline := lastReconcile.Add(minWake)
+			if !time.Now().Before(wakeDeadline) {
+				slog.Info("received wake, reconciling", "reason", reason)
+				p.hint("received wake (%s), reconciling", reason)
+				return true, nil
 			}
-			slog.Info("received wake, reconciling", "reason", reason)
-			pout.hint("received wake (%s), reconciling", reason)
-			continue
+			if !wakePending {
+				// Coalesce: fire at the debounce deadline, or the regular
+				// interval if that comes first. Later wakes fold into this one.
+				slog.Debug("wake debounced", "reason", reason, "until", wakeDeadline)
+				next := intervalDeadline
+				if wakeDeadline.Before(next) {
+					next = wakeDeadline
+				}
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(time.Until(next))
+				wakePending = true
+			}
 		case <-timer.C:
+			return true, nil
 		}
 	}
 }
@@ -248,6 +283,15 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if lanStore != nil {
 		if port, err := manager.ListenPort(); err == nil {
 			lanStore.SetSelf(self.PublicKey, port)
+		}
+		// Reclaim entries for nodes that left the directory and any that have
+		// gone unrefreshed for 10× the beacon TTL (spec/lan-discovery.md).
+		members := make(map[string]bool, len(res.Directory.Nodes))
+		for i := range res.Directory.Nodes {
+			members[res.Directory.Nodes[i].PublicKey] = true
+		}
+		if n := lanStore.GC(time.Now(), 10*lanStore.TTL(), members); n > 0 {
+			slog.Debug("discovery store gc", "removed", n)
 		}
 		if err := cache.WriteDiscovery(cfg.Sync.StateDir, lanStore.Snapshot()); err != nil {
 			slog.Debug("write discovery state failed", "error", err)

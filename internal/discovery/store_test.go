@@ -18,9 +18,74 @@ func TestStoreUpdateFirstSeen(t *testing.T) {
 	if r.Changed || r.FirstSeen {
 		t.Fatalf("idempotent update should be neither, got %+v", r)
 	}
+	// A different endpoint is pinned out while the incumbent is still usable.
 	r = s.Update("alice", "10.0.0.2:51820", now.Add(60*time.Second))
+	if r.Changed || r.FirstSeen {
+		t.Fatalf("endpoint-change while usable should be rejected, got %+v", r)
+	}
+	if got := s.Lookup("alice", now.Add(61*time.Second)); got != "10.0.0.1:51820" {
+		t.Fatalf("pinned endpoint = %q, want the incumbent", got)
+	}
+	// Once the incumbent ages out, the next different endpoint is accepted.
+	r = s.Update("alice", "10.0.0.2:51820", now.Add(200*time.Second))
 	if !r.Changed || r.FirstSeen {
-		t.Fatalf("endpoint-change should be Changed but not FirstSeen, got %+v", r)
+		t.Fatalf("endpoint-change after TTL should be Changed, got %+v", r)
+	}
+	if got := s.Lookup("alice", now.Add(200*time.Second)); got != "10.0.0.2:51820" {
+		t.Fatalf("post-TTL endpoint = %q", got)
+	}
+}
+
+// A spoofed beacon repeating the exact endpoint that just failed must not
+// resurrect it; only a different candidate clears the failure.
+func TestStoreFailedEndpointNotResurrectedBySameBeacon(t *testing.T) {
+	s := NewStore(90 * time.Second)
+	t0 := time.Now()
+	s.Update("alice", "10.0.0.1:51820", t0)
+	s.MarkFailed("alice", t0.Add(time.Second))
+	if got := s.Lookup("alice", t0.Add(2*time.Second)); got != "" {
+		t.Fatalf("blacklisted lookup = %q, want empty", got)
+	}
+	// Same endpoint, repeatedly — stays blacklisted no matter how fresh.
+	for i := range 5 {
+		s.Update("alice", "10.0.0.1:51820", t0.Add(time.Duration(10+i)*time.Second))
+	}
+	if got := s.Lookup("alice", t0.Add(20*time.Second)); got != "" {
+		t.Fatalf("same-endpoint beacons resurrected a failed path: %q", got)
+	}
+	// A different endpoint is a fresh candidate and clears the failure.
+	r := s.Update("alice", "10.0.0.9:51820", t0.Add(30*time.Second))
+	if !r.Changed {
+		t.Fatalf("different endpoint after failure should be Changed, got %+v", r)
+	}
+	if got := s.Lookup("alice", t0.Add(31*time.Second)); got != "10.0.0.9:51820" {
+		t.Fatalf("recovered lookup = %q", got)
+	}
+}
+
+func TestStoreGC(t *testing.T) {
+	ttl := 90 * time.Second
+	s := NewStore(ttl)
+	t0 := time.Now()
+	s.Update("alice", "10.0.0.1:51820", t0)
+	s.Update("bob", "10.0.0.2:51820", t0)
+
+	// alice is still a member and fresh; bob left the directory.
+	if removed := s.GC(t0.Add(time.Minute), 10*ttl, map[string]bool{"alice": true}); removed != 1 {
+		t.Fatalf("membership GC removed %d, want 1", removed)
+	}
+	if got := s.LookupLastKnown("bob"); got != "" {
+		t.Fatal("bob entry survived membership GC")
+	}
+	if got := s.LookupLastKnown("alice"); got == "" {
+		t.Fatal("alice entry wrongly GC'd")
+	}
+	// alice ages out past 10×TTL even while still a member.
+	if removed := s.GC(t0.Add(11*ttl), 10*ttl, map[string]bool{"alice": true}); removed != 1 {
+		t.Fatalf("staleness GC removed %d, want 1", removed)
+	}
+	if got := s.LookupLastKnown("alice"); got != "" {
+		t.Fatal("stale alice entry survived GC")
 	}
 }
 
@@ -39,7 +104,7 @@ func TestStoreLookupTTL(t *testing.T) {
 	}
 }
 
-func TestStoreMarkFailedAndRevalidate(t *testing.T) {
+func TestStoreMarkFailedBlacklistsCurrentEndpoint(t *testing.T) {
 	s := NewStore(90 * time.Second)
 	t0 := time.Now()
 	s.Update("alice", "10.0.0.1:51820", t0)
@@ -50,16 +115,9 @@ func TestStoreMarkFailedAndRevalidate(t *testing.T) {
 	if got := s.Lookup("alice", t0.Add(2*time.Second)); got != "" {
 		t.Fatalf("blacklisted lookup = %q, want empty", got)
 	}
-	// Re-validating beacon clears the blacklist.
-	r := s.Update("alice", "10.0.0.1:51820", t0.Add(10*time.Second))
-	if !r.Changed {
-		t.Fatalf("re-validation should report Changed, got %+v", r)
-	}
-	if r.FirstSeen {
-		t.Fatalf("re-validation is not FirstSeen, got %+v", r)
-	}
-	if got := s.Lookup("alice", t0.Add(11*time.Second)); got != "10.0.0.1:51820" {
-		t.Fatalf("re-validated lookup = %q", got)
+	// LookupLastKnown ignores the blacklist (same-NAT recovery path).
+	if got := s.LookupLastKnown("alice"); got != "10.0.0.1:51820" {
+		t.Fatalf("last-known while blacklisted = %q", got)
 	}
 }
 

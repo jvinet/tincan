@@ -459,7 +459,7 @@ func discoveryStatusFields(state cache.DiscoveryState, nodesByPubkey map[string]
 			LearnedAt: lan.LearnedAt,
 			FailedAt:  lan.FailedAt,
 		}
-		if !lan.FailedAt.IsZero() && !lan.FailedAt.Before(lan.LearnedAt) {
+		if lan.Blacklisted() {
 			e.Stale = true
 		}
 		if node, ok := nodesByPubkey[pubkey]; ok {

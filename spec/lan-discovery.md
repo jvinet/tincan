@@ -243,20 +243,32 @@ type LANState struct {
 
 Three events advance the state:
 
-- **Beacon arrives** (listener): `Endpoint`, `LearnedAt` set;
-  `FailedAt` left as-is. If the new `LearnedAt > FailedAt`, the entry is
-  effectively re-validated.
+- **Beacon arrives** (listener): if the pubkey is new, learn the
+  endpoint. A beacon repeating the *same* endpoint refreshes `LearnedAt`
+  only — it never clears a failure stamped on that same endpoint. A
+  beacon advertising a *different* endpoint is accepted only when the
+  current one is no longer usable (stale or failed); while the current
+  endpoint is usable the change is rejected (pinning), so an
+  unauthenticated beacon can't displace a working path. See "Security
+  considerations § Authentication of beacons."
 - **TTL expires** (next iteration after `now - LearnedAt > TTL`):
   `Lookup` returns empty; effectively unused. We don't actively delete —
-  a fresh beacon revives it. Garbage-collected if the entry is older
-  than `10 × TTL`.
-- **RELAYED transition** (relay controller, see below): `FailedAt = now`
-  is stamped for any peer that just transitioned `DIRECT → RELAYED`.
-  This blacklists the LAN endpoint until the next beacon (which will
-  push `LearnedAt > FailedAt` and unblock it). Same-NAT peers are exempt
-  from the blacklist at lookup time: their shadow-peer probes keep
-  targeting the last-known LAN endpoint, because the hairpin alternative
-  can never complete a handshake.
+  a fresh beacon revives it. Garbage-collected (`Store.GC`, called each
+  daemon iteration) once the entry is older than `10 × TTL` or its
+  pubkey has left the directory.
+- **RELAYED transition** (relay controller, see below): `MarkFailed`
+  stamps `FailedAt = now` and records `FailedEndpoint = Endpoint` for
+  any peer that just transitioned `DIRECT → RELAYED`. That specific
+  endpoint stays blacklisted until a beacon advertises a *different*
+  one; repeating the failed address does not unblock it. Same-NAT peers
+  are exempt from the blacklist at lookup time: their shadow-peer probes
+  keep targeting the last-known LAN endpoint, because the hairpin
+  alternative can never complete a handshake.
+
+Wake-triggered reconciles (a beacon learning or changing an endpoint
+nudges the daemon to reconverge immediately) are debounced to at most
+one per 10s, so a beacon storm or a flapping dual-homed peer can't drive
+back-to-back drop fetches.
 
 ### Why no new state in `relay.Mode`?
 
@@ -523,21 +535,36 @@ on. Document this as a known limitation.
 ### Authentication of beacons
 A beacon claims a pubkey but doesn't prove possession. A malicious LAN
 device could send `{V:1, PublicKey:<kilo's_pubkey>, Port:31337}` from
-its own address. Our daemon would set peer kilo's endpoint to the
-attacker's `IP:31337`. Our WG would attempt a handshake there; the
-attacker doesn't have kilo's private key; handshake fails; after 90s
-we flip to RELAYED; `MarkFailed` blacklists the attacker's address;
-next legitimate beacon from kilo re-validates.
+its own address, trying to point our WG at the attacker. Two store
+rules bound the damage (`internal/discovery/store.go`):
 
-Net effect of attack: up to 90s of broken connectivity to kilo,
-followed by recovery. No data leak (handshake never completes; no
-plaintext sent). No persistent compromise.
+- **Pinning.** A beacon advertising an endpoint *different* from the
+  one currently stored is rejected while that stored endpoint is still
+  usable (within TTL, not failed). An unsolicited beacon therefore
+  cannot displace a *working* path; the incumbent must fail or age out
+  first. So the attack only lands if kilo has no usable endpoint yet
+  (no prior beacon) — the first beacon wins, as before.
+- **Failed-endpoint memory.** When the relay machine flips kilo to
+  RELAYED, `MarkFailed` records the *specific* endpoint that failed. A
+  beacon repeating that same address does **not** resurrect it — only a
+  beacon for a genuinely different endpoint clears the failure. A
+  spoofed flood of the same bad address can no longer keep re-validating
+  a dead path.
 
-Mitigation if 90s is too much: a future schema (`V == 2`) could
-embed an Ed25519 signature over the beacon body using the sender's
-identity key (separate from the WG key for forward-secrecy reasons),
-with the identity pubkey added to the directory alongside `pk`. Out
-of scope for V1.
+Net effect of a one-shot spoof that wins the race: up to ~90s of broken
+direct connectivity to kilo (relay carries traffic meanwhile), then the
+attacker's endpoint is blacklisted. A *persistent* attacker can still
+delay LAN recovery by rotating through fresh bad endpoints while kilo's
+real path is down, but each costs a 90s cycle and the real beacon
+competes for the slot; it cannot hold a working path hostage. Same-NAT
+peers are unaffected throughout: they look up with `staleOK`, bypassing
+the blacklist, so their probe target is always the last-known endpoint.
+No data leak in any case (the handshake never completes).
+
+Full authentication needs a future schema (`V == 2`) embedding an
+Ed25519 signature over the beacon body using the sender's identity key
+(separate from the WG key), with the identity pubkey added to the
+directory alongside `pk`. Out of scope for V1.
 
 ### Replay
 Beacons carry a `Nonce` field but it's unused in V1. A replayed beacon
