@@ -22,13 +22,25 @@ func mustPubKey(t *testing.T) string {
 	return pub
 }
 
+// mustAgeRcpt marks a fixture node as a tincan member: directory members
+// without an AgeRecipient are plain-WireGuard spokes (Node.IsPlainWireGuard),
+// whose shadow peers are built bare (no endpoint, no keepalive).
+func mustAgeRcpt(t *testing.T) string {
+	t.Helper()
+	_, rcpt, err := keys.GenerateAgeIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rcpt
+}
+
 func peerFixture(t *testing.T) (directory.Node, directory.Directory) {
 	t.Helper()
-	self := directory.Node{Name: "alice", PublicKey: mustPubKey(t), TunnelIP: "10.42.0.1"}
+	self := directory.Node{Name: "alice", PublicKey: mustPubKey(t), TunnelIP: "10.42.0.1", AgeRecipient: mustAgeRcpt(t)}
 	dir := directory.Directory{Nodes: []directory.Node{
 		self,
-		{Name: "bob", PublicKey: mustPubKey(t), TunnelIP: "10.42.0.2", Endpoint: "127.0.0.1:51820"},
-		{Name: "carol", PublicKey: mustPubKey(t), TunnelIP: "10.42.0.3"},
+		{Name: "bob", PublicKey: mustPubKey(t), TunnelIP: "10.42.0.2", Endpoint: "127.0.0.1:51820", AgeRecipient: mustAgeRcpt(t)},
+		{Name: "carol", PublicKey: mustPubKey(t), TunnelIP: "10.42.0.3", AgeRecipient: mustAgeRcpt(t)},
 	}}
 	return self, dir
 }
@@ -504,6 +516,47 @@ func TestBuildPeerConfigsRelayFoldsAllowedIPs(t *testing.T) {
 	}
 	if carol.PersistentKeepaliveInterval == nil || *carol.PersistentKeepaliveInterval != 25*time.Second {
 		t.Fatalf("carol shadow peer should keep keepalive (drives the probe); got %v", carol.PersistentKeepaliveInterval)
+	}
+}
+
+func TestBuildPeerConfigsRelayedPlainWGSpokeStaysBare(t *testing.T) {
+	// carol is a plain-WireGuard spoke (no AgeRecipient): her enrolled config
+	// knows only her hub, so the shadow probe could never complete — the
+	// shadow entry gets no endpoint (despite an observed one being available)
+	// and no keepalive. Her tunnel IP still folds into the relay target.
+	self, dir := peerFixture(t)
+	dir.Nodes[2].AgeRecipient = ""
+	dir.Nodes[2].ObservedEndpoint = "203.0.113.10:5555"
+	dir.Nodes[2].ObservedAt = time.Now()
+	relayed := map[string]bool{dir.Nodes[2].PublicKey: true} // carol
+
+	peers, err := BuildPeerConfigs(config.WireguardConfig{}, self, dir, relayed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bob, carol *wgtypes.PeerConfig
+	for i := range peers {
+		switch peers[i].PublicKey.String() {
+		case dir.Nodes[1].PublicKey:
+			bob = &peers[i]
+		case dir.Nodes[2].PublicKey:
+			carol = &peers[i]
+		}
+	}
+	if bob == nil || carol == nil {
+		t.Fatalf("missing peers: bob=%v carol=%v", bob, carol)
+	}
+	if len(bob.AllowedIPs) != 2 || bob.AllowedIPs[1].IP.String() != "10.42.0.3" {
+		t.Fatalf("bob (relay) should carry carol's tunnel IP; got %+v", bob.AllowedIPs)
+	}
+	if len(carol.AllowedIPs) != 0 {
+		t.Fatalf("carol (shadow) should have empty AllowedIPs; got %+v", carol.AllowedIPs)
+	}
+	if carol.Endpoint != nil {
+		t.Fatalf("spoke shadow peer must not get an endpoint (the probe can't succeed); got %v", carol.Endpoint)
+	}
+	if carol.PersistentKeepaliveInterval != nil {
+		t.Fatalf("spoke shadow peer must not get keepalive; got %v", carol.PersistentKeepaliveInterval)
 	}
 }
 

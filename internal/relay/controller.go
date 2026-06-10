@@ -43,18 +43,14 @@ type Decision struct {
 // next WG configuration. Pass the current wgctrl peer snapshot and the
 // directory that the daemon just synced.
 //
-// If `self` has its own public Endpoint (admin/public-relay role), Update
-// returns an empty decision: such nodes already have direct paths to all
-// peers and don't benefit from relaying.
+// If `self` has its own public Endpoint (admin/public-relay role), tincan
+// peers are never relayed: they initiate outbound to self's endpoint and keep
+// the path alive themselves. Plain-WireGuard members are the exception — they
+// only ever talk to their hub, so they are relayed from every node but the
+// hub, public or not.
 func (c *Controller) Update(self directory.Node, dir directory.Directory, peers []wgtypes.Peer, now time.Time) Decision {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if self.Endpoint != "" {
-		slog.Debug("relay: skipping decision (self has endpoint)", "self", self.Name)
-		c.states = make(map[string]PeerState)
-		return Decision{}
-	}
 
 	target := pickRelayTarget(dir, self.PublicKey)
 	if target == nil {
@@ -74,6 +70,34 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 		// Peers with an operator-configured public endpoint don't need relay.
 		if node.Endpoint != "" {
 			slog.Debug("relay: peer ineligible (has public endpoint)", "peer", node.Name)
+			newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
+			continue
+		}
+		// A plain-WireGuard member is a hub-and-spoke spoke: its enrolled
+		// config knows only its hub, so it never initiates to anyone else and
+		// drops handshakes from keys it doesn't recognize. Direct is
+		// structurally impossible from every node but the hub — relay by
+		// construction, not by failure detection. The hub is RelayTarget from
+		// the spoke's perspective; whenever it isn't self, it is necessarily
+		// `target` too (the spoke is never a candidate, so excluding it
+		// changes nothing, and excluding self only matters when self IS the
+		// hub).
+		if node.IsPlainWireGuard() {
+			hub, ok := directory.RelayTarget(dir, node.PublicKey)
+			if ok && hub.PublicKey != self.PublicKey {
+				slog.Debug("relay: plain-WireGuard peer relayed via its hub", "peer", node.Name, "hub", hub.Name)
+				newStates[node.PublicKey] = PeerState{Mode: ModeRelayed, EnteredAt: now}
+				relayed[node.PublicKey] = true
+			} else {
+				slog.Debug("relay: plain-WireGuard peer direct (self is its hub, or no hub exists)", "peer", node.Name)
+				newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
+			}
+			continue
+		}
+		// Tincan peers initiate outbound to self's public endpoint and keep
+		// the path alive with keepalives, so a node with its own endpoint
+		// never needs to relay traffic toward them.
+		if self.Endpoint != "" {
 			newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
 			continue
 		}

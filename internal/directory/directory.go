@@ -38,6 +38,16 @@ type Node struct {
 	PSK              string    `msgpack:"psk,omitempty"`
 }
 
+// IsPlainWireGuard reports whether the node is a plain WireGuard member
+// (enrolled with `add-node --client-type=wireguard`): it runs no Tincan daemon
+// and carries no AgeRecipient because it never reads the directory. Its
+// enrolled config is hub-and-spoke — the only peer it knows is its hub (the
+// RelayTarget at enrollment time) — so it never initiates handshakes to other
+// members and silently drops theirs as coming from unknown keys.
+func (n Node) IsPlainWireGuard() bool {
+	return n.AgeRecipient == ""
+}
+
 type Envelope struct {
 	Payload   []byte `msgpack:"p"`
 	Signature []byte `msgpack:"sig"`

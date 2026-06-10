@@ -260,9 +260,12 @@ where `--bootstrap` applies; the two flag sets are mutually exclusive and
 These are **hub-and-spoke**: the client peers with one node — the network's
 relay (a node marked `--relay`, else the first with a public `--endpoint`) — and
 routes the whole network CIDR through it (add an endpoint-bearing node first, or
-you'll get an error). It's a point-in-time snapshot — the device doesn't run
-Tincan, so it won't pick up later directory changes (rotated keys, moved
-endpoints, new nodes); re-run to refresh it.
+you'll get an error). Traffic toward the client works the same way: its config
+knows only the hub, so every other node automatically routes the client's
+tunnel IP through the hub (see [Relay fallback](#relay-fallback)). It's a
+point-in-time snapshot — the device doesn't run Tincan, so it won't pick up
+later directory changes (rotated keys, moved endpoints, new nodes); re-run to
+refresh it.
 
 Lost the config for a node that's already enrolled? `tincan render-node --name
 phone` regenerates its `wg-quick` config from the current directory. The admin
@@ -434,6 +437,15 @@ echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/99-tincan.conf
 The admin daemon warns on startup if forwarding is off. There is no
 client-side configuration — relay fallback is on by default for every
 non-admin node.
+
+Plain WireGuard members (`--client-type=wireguard`) skip the failure
+detection entirely. A spoke's enrolled config knows only its hub, so no
+other node can ever reach it directly: it never initiates handshakes to
+them, and drops theirs as coming from unknown keys. Every node except the
+hub therefore routes the spoke's traffic through the hub from the first
+iteration — including nodes that have their own public endpoint, which
+never relay tincan peers — and the spoke's shadow peer carries no endpoint
+or keepalive, since a background probe could never complete.
 
 `tincan status` shows the chosen mode per peer (`direct` or `relayed via X`).
 Per-peer mode lives in daemon memory; on daemon restart all peers start in

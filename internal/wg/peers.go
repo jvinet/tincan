@@ -32,6 +32,9 @@ type LANEndpointLookup func(pubkey string, staleOK bool) string
 // background handshakes on those shadow peers; when one succeeds, the
 // daemon observes a fresh LastHandshakeTime via wgctrl and flips the peer
 // back to DIRECT (just reshuffling AllowedIPs — no peer add/remove).
+// Plain-WireGuard spokes are the exception: their shadow entries carry no
+// endpoint or keepalive, because a spoke's config knows only its hub and
+// the probe could never complete a handshake anyway.
 //
 // The relay target is chosen by directory.RelayTarget: a node explicitly
 // marked Relay (with a public Endpoint), else the first non-self node with a
@@ -79,6 +82,12 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 			return nil, fmt.Errorf("peer %q tunnel IP: %w", node.Name, err)
 		}
 		shadow := relayed[node.PublicKey] && relayTargetKey != "" && node.PublicKey != relayTargetKey
+		// A tincan shadow peer keeps its endpoint and keepalive so the kernel
+		// probes direct reachability in the background. For a plain-WireGuard
+		// spoke that probe can never succeed — its config knows only its hub,
+		// and WireGuard drops initiations from unknown keys — so its shadow
+		// entry stays bare: no endpoint, no keepalive, no handshake spray.
+		bareShadow := shadow && node.IsPlainWireGuard()
 		peer := wgtypes.PeerConfig{
 			PublicKey:         pub,
 			ReplaceAllowedIPs: true,
@@ -89,24 +98,26 @@ func BuildPeerConfigs(cfg config.WireguardConfig, self directory.Node, dir direc
 		} else {
 			peer.AllowedIPs = []net.IPNet{*tunnel}
 		}
-		endpointStr := chooseEndpoint(self, node, lanLookup)
-		if endpointStr != "" {
-			// A single unresolvable endpoint (transient DNS failure, a
-			// malformed operator value) must not abort the whole batch:
-			// failing here would block pruning removed peers and applying
-			// relay decisions for every other peer, every iteration. Skip
-			// just this peer's endpoint — the kernel keeps whatever endpoint
-			// it last had, and the relay/shadow machinery recovers it.
-			endpoint, err := net.ResolveUDPAddr("udp", endpointStr)
-			if err != nil {
-				slog.Warn("skipping unresolvable peer endpoint", "peer", node.Name, "endpoint", endpointStr, "error", err)
-			} else {
-				peer.Endpoint = endpoint
+		if !bareShadow {
+			endpointStr := chooseEndpoint(self, node, lanLookup)
+			if endpointStr != "" {
+				// A single unresolvable endpoint (transient DNS failure, a
+				// malformed operator value) must not abort the whole batch:
+				// failing here would block pruning removed peers and applying
+				// relay decisions for every other peer, every iteration. Skip
+				// just this peer's endpoint — the kernel keeps whatever endpoint
+				// it last had, and the relay/shadow machinery recovers it.
+				endpoint, err := net.ResolveUDPAddr("udp", endpointStr)
+				if err != nil {
+					slog.Warn("skipping unresolvable peer endpoint", "peer", node.Name, "endpoint", endpointStr, "error", err)
+				} else {
+					peer.Endpoint = endpoint
+				}
 			}
-		}
-		if keepalive > 0 {
-			ka := keepalive
-			peer.PersistentKeepaliveInterval = &ka
+			if keepalive > 0 {
+				ka := keepalive
+				peer.PersistentKeepaliveInterval = &ka
+			}
 		}
 		if node.PublicKey == relayTargetKey {
 			relayTargetIdx = len(peers)

@@ -13,6 +13,11 @@
 // LastHandshakeTime becomes fresh and Decide flips the peer back to
 // DIRECT. No timed probes, no service interruption — the data path
 // through the relay stays up until direct is proven viable.
+//
+// Plain-WireGuard members bypass the state machine entirely: a spoke's
+// enrolled config knows only its hub, so direct is structurally impossible
+// from any other node — including nodes with their own public endpoint —
+// and the Controller relays them by construction.
 package relay
 
 import (
