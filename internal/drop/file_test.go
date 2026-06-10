@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/jvinet/tincan/internal/directory"
 )
 
 func TestFileDropRoundTrip(t *testing.T) {
@@ -52,5 +56,16 @@ func TestFileDropHonorsCanceledContext(t *testing.T) {
 	}
 	if _, err := d.Stat(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Stat error=%v, want context.Canceled", err)
+	}
+}
+
+func TestFileDropRejectsOversizedObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "directory.bin")
+	if err := os.WriteFile(path, make([]byte, directory.MaxBlobSize+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := NewFile(path)
+	if _, err := d.Get(context.Background()); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected size error, got %v", err)
 	}
 }

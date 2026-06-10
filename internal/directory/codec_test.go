@@ -2,11 +2,14 @@ package directory
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"strings"
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/jvinet/tincan/internal/keys"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func sampleDirectory(t *testing.T) Directory {
@@ -142,6 +145,74 @@ func TestOpenRejectsTamperedBlob(t *testing.T) {
 	blob[len(blob)-1] ^= 0xff
 	if _, _, err := Open(blob, identity, publisherPub); err == nil {
 		t.Fatal("tampered blob unexpectedly verified")
+	}
+}
+
+func TestOpenRejectsOversizedBlob(t *testing.T) {
+	identity, _, err := keys.GenerateAgeIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisherPub, _, err := keys.GenerateEd25519Keypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := make([]byte, MaxBlobSize+1)
+	_, _, err = Open(blob, identity, publisherPub)
+	if err == nil || !strings.Contains(err.Error(), "max") {
+		t.Fatalf("expected size error, got %v", err)
+	}
+}
+
+// The envelope is decoded before signature verification, so unknown fields
+// must be rejected rather than skipped (skipping recurses unboundedly on
+// attacker-shaped plaintext). Envelope schema evolution belongs inside the
+// signed payload.
+func TestOpenRejectsUnknownEnvelopeFields(t *testing.T) {
+	identity, _, err := keys.GenerateAgeIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisherPub, publisherPriv, err := keys.GenerateEd25519Keypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := MarshalPlain(sampleDirectory(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signKey, err := keys.DecodeEd25519Private(publisherPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extended := struct {
+		Payload   []byte `msgpack:"p"`
+		Signature []byte `msgpack:"sig"`
+		Extra     []byte `msgpack:"x"`
+	}{payload, ed25519.Sign(signKey, payload), []byte("future")}
+	envBytes, err := msgpack.Marshal(extended)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := keys.ParseAgeIdentity(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encrypted bytes.Buffer
+	w, err := age.Encrypt(&encrypted, id.Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(envBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = Open(encrypted.Bytes(), identity, publisherPub)
+	if err == nil || !strings.Contains(err.Error(), "envelope") {
+		t.Fatalf("expected envelope decode error, got %v", err)
 	}
 }
 

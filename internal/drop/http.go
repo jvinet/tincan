@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jvinet/tincan/internal/directory"
 )
 
 type HTTP struct {
@@ -42,9 +44,18 @@ func (h *HTTP) Get(ctx context.Context) ([]byte, error) {
 	if err := httpStatusError(resp.StatusCode); err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(resp.Body)
+	if resp.ContentLength > directory.MaxBlobSize {
+		return nil, fmt.Errorf("dead-drop object is %d bytes (max %d)", resp.ContentLength, directory.MaxBlobSize)
+	}
+	// The Content-Length check alone is insufficient: chunked responses omit
+	// it, and the transport transparently decompresses Content-Encoding, so
+	// the read itself must be bounded.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, directory.MaxBlobSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read HTTP response: %w", err)
+	}
+	if len(data) > directory.MaxBlobSize {
+		return nil, fmt.Errorf("dead-drop object exceeds %d bytes", directory.MaxBlobSize)
 	}
 	return data, nil
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/jvinet/tincan/internal/config"
+	"github.com/jvinet/tincan/internal/directory"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -39,9 +40,12 @@ func (s *S3) Get(ctx context.Context) ([]byte, error) {
 		return nil, mapS3Err(err)
 	}
 	defer obj.Close()
-	data, err := io.ReadAll(obj)
+	data, err := io.ReadAll(io.LimitReader(obj, directory.MaxBlobSize+1))
 	if err != nil {
 		return nil, mapS3Err(err)
+	}
+	if len(data) > directory.MaxBlobSize {
+		return nil, fmt.Errorf("dead-drop object exceeds %d bytes", directory.MaxBlobSize)
 	}
 	return data, nil
 }

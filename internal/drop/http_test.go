@@ -6,8 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jvinet/tincan/internal/directory"
 )
 
 func TestHTTPDrop(t *testing.T) {
@@ -100,5 +104,32 @@ func TestHTTPDropStatusMapping(t *testing.T) {
 				t.Fatal("expected generic HTTP status error")
 			}
 		})
+	}
+}
+
+// A hostile drop streaming an unbounded body (chunked, no Content-Length)
+// must be cut off at the blob cap instead of exhausting memory.
+func TestHTTPDropRejectsOversizedObject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, directory.MaxBlobSize+1))
+	}))
+	defer srv.Close()
+	d := NewHTTP(srv.URL, "", "")
+	if _, err := d.Get(context.Background()); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected size error, got %v", err)
+	}
+}
+
+// When the server declares the oversize up front, the fetch must abort on
+// the header without reading the body at all.
+func TestHTTPDropRejectsDeclaredOversizedObject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.FormatInt(directory.MaxBlobSize+1, 10))
+		_, _ = w.Write(make([]byte, directory.MaxBlobSize+1))
+	}))
+	defer srv.Close()
+	d := NewHTTP(srv.URL, "", "")
+	if _, err := d.Get(context.Background()); err == nil || !strings.Contains(err.Error(), "max") {
+		t.Fatalf("expected size error, got %v", err)
 	}
 }

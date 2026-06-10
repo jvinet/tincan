@@ -178,7 +178,18 @@ func Seal(dir Directory, networkIdentity string, publisherPrivateKey string) ([]
 	return encrypted.Bytes(), nil
 }
 
+// MaxBlobSize bounds a sealed directory blob. The drop is untrusted: every
+// byte fetched from it is read into memory before authentication, so the
+// remote transports cap their reads at this size and Open double-checks. A
+// real directory is a few KB (the DNS backend caps itself at ~16 KB); 4 MiB
+// leaves three orders of magnitude of headroom while turning a hostile
+// drop's multi-gigabyte (or gzip-bombed) response into a cheap, early error.
+const MaxBlobSize = 4 << 20
+
 func Open(blob []byte, networkIdentity string, publisherPublicKey string) (Directory, []byte, error) {
+	if len(blob) > MaxBlobSize {
+		return Directory{}, nil, fmt.Errorf("directory blob is %d bytes (max %d)", len(blob), MaxBlobSize)
+	}
 	identity, err := keys.ParseAgeIdentity(networkIdentity)
 	if err != nil {
 		return Directory{}, nil, err
@@ -191,12 +202,22 @@ func Open(blob []byte, networkIdentity string, publisherPublicKey string) (Direc
 	if err != nil {
 		return Directory{}, nil, fmt.Errorf("decrypt directory: %w", err)
 	}
-	plaintext, err := io.ReadAll(r)
+	plaintext, err := io.ReadAll(io.LimitReader(r, MaxBlobSize+1))
 	if err != nil {
 		return Directory{}, nil, fmt.Errorf("read decrypted directory: %w", err)
 	}
+	if len(plaintext) > MaxBlobSize {
+		return Directory{}, nil, fmt.Errorf("decrypted directory exceeds %d bytes", MaxBlobSize)
+	}
+	// The envelope is decoded before signature verification, on plaintext
+	// that anyone holding the shared age identity can produce. Unknown
+	// fields would be skipped via unbounded recursion (a stack-exhaustion
+	// surface); reject them instead — schema evolution belongs inside the
+	// signed payload, not the envelope.
+	dec := msgpack.NewDecoder(bytes.NewReader(plaintext))
+	dec.DisallowUnknownFields(true)
 	var envelope Envelope
-	if err := msgpack.Unmarshal(plaintext, &envelope); err != nil {
+	if err := dec.Decode(&envelope); err != nil {
 		return Directory{}, nil, fmt.Errorf("decode directory envelope: %w", err)
 	}
 	if len(envelope.Payload) == 0 || len(envelope.Signature) == 0 {

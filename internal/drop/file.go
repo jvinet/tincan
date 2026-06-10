@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/google/renameio/v2"
+	"github.com/jvinet/tincan/internal/directory"
 )
 
 type File struct {
@@ -24,12 +26,22 @@ func (f *File) Get(ctx context.Context) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(f.path)
+	fh, err := os.Open(f.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read file drop: %w", err)
+	}
+	defer fh.Close()
+	// Bounded like the remote backends: a shared-filesystem drop is just as
+	// untrusted as an HTTP one.
+	data, err := io.ReadAll(io.LimitReader(fh, directory.MaxBlobSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read file drop: %w", err)
+	}
+	if len(data) > directory.MaxBlobSize {
+		return nil, fmt.Errorf("dead-drop object exceeds %d bytes", directory.MaxBlobSize)
 	}
 	return data, nil
 }
