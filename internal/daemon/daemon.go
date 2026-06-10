@@ -37,6 +37,16 @@ func Stop(pidFile string, wait time.Duration) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// The daemon holds an exclusive flock on the pid file for its whole life.
+	// If we can take that lock, no daemon is running and the recorded PID is
+	// stale — refuse to signal it, since after an unclean exit the OS may have
+	// recycled it to an unrelated process. The flock is authoritative; a bare
+	// kill(pid,0) is not.
+	if free, err := pidFileUnlocked(pidFile); err != nil {
+		return pid, err
+	} else if free {
+		return pid, ErrNotRunning
+	}
 	if !PIDAlive(pid) {
 		return pid, ErrNotRunning
 	}

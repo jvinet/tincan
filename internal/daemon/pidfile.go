@@ -34,7 +34,10 @@ func AcquirePIDFile(path string, pid int) (*PIDFile, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create PID directory: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	// O_NOFOLLOW: if the final path component is a symlink (e.g. one planted
+	// at an attacker-writable pid_file location), refuse rather than follow it
+	// and truncate the target as root.
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open PID file: %w", err)
 	}
@@ -119,6 +122,26 @@ func ReadPID(path string) (int, error) {
 		return 0, fmt.Errorf("parse PID file: %w", err)
 	}
 	return pid, nil
+}
+
+// pidFileUnlocked reports whether the pid file's advisory lock is free — i.e.
+// no live daemon holds it. It briefly takes and releases a non-blocking
+// exclusive lock; success means the file is unlocked (stale pid), EWOULDBLOCK
+// means a daemon holds it (live). The file must already exist.
+func pidFileUnlocked(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return false, fmt.Errorf("open PID file: %w", err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return false, nil // a daemon holds the lock → live
+		}
+		return false, fmt.Errorf("probe PID file lock: %w", err)
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return true, nil
 }
 
 func PIDAlive(pid int) bool {

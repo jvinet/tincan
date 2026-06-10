@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	mrand "math/rand/v2"
 	"net"
 	"os"
 	"os/signal"
@@ -27,8 +28,14 @@ type UpCmd struct {
 }
 
 func (c *UpCmd) Run(ctx context.Context, g *Globals) error {
-	if daemonConfig := os.Getenv(daemon.EnvConfig); daemonConfig != "" {
-		g.Config = daemonConfig
+	// _TINCAN_CONFIG is set by the parent only for the forked daemon child, so
+	// the child resolves the same config path the parent did regardless of its
+	// post-fork cwd. Honor it only in that child — a stray value in an
+	// interactive shell must not silently redirect `tincan up` away from -c.
+	if daemon.IsChild() {
+		if daemonConfig := os.Getenv(daemon.EnvConfig); daemonConfig != "" {
+			g.Config = daemonConfig
+		}
 	}
 	cfg, err := loadConfig(g)
 	if err != nil {
@@ -158,11 +165,23 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 		if cfg != nil {
 			interval = cfg.Sync.Interval.Or(config.DefaultInterval)
 		}
-		proceed, err := waitForReconcile(ctx, sigCh, wakeCh, interval, minWakeInterval, time.Now(), pout)
+		// Jitter ±10% so a fleet started from one image (e.g. a reboot that
+		// brings every node up together) doesn't hammer the drop in lockstep.
+		proceed, err := waitForReconcile(ctx, sigCh, wakeCh, jitter(interval), minWakeInterval, time.Now(), pout)
 		if !proceed {
 			return err
 		}
 	}
+}
+
+// jitter returns d perturbed by up to ±10%, never below zero.
+func jitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	span := int64(d) / 5 // 20% wide window
+	delta := mrand.Int64N(span+1) - span/2
+	return time.Duration(int64(d) + delta)
 }
 
 // minWakeInterval is the minimum spacing between wake-triggered reconciles.

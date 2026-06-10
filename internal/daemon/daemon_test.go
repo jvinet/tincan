@@ -25,6 +25,17 @@ func TestStopNotRunning(t *testing.T) {
 	if _, err := Stop(dead, time.Second); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("expected ErrNotRunning for dead pid, got %v", err)
 	}
+
+	// PID file naming a *live* process (our own) but not flock-held: a stale
+	// file left by a crashed daemon whose PID the OS recycled. Stop must not
+	// signal it — the absence of the lock is the proof no daemon is running.
+	recycled := filepath.Join(t.TempDir(), "recycled.pid")
+	if err := os.WriteFile(recycled, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Stop(recycled, time.Second); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("expected ErrNotRunning for unlocked (recycled) pid, got %v", err)
+	}
 }
 
 func TestStopSignalsAndWaitsForExit(t *testing.T) {
@@ -37,10 +48,14 @@ func TestStopSignalsAndWaitsForExit(t *testing.T) {
 	waited := make(chan error, 1)
 	go func() { waited <- cmd.Wait() }()
 
+	// Hold the pid-file flock to stand in for a live daemon: Stop now treats
+	// the lock, not just the recorded pid, as proof the daemon is running.
 	path := filepath.Join(t.TempDir(), "tincan.pid")
-	if err := os.WriteFile(path, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o644); err != nil {
-		t.Fatal(err)
+	pf, err := AcquirePIDFile(path, cmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("acquire pid file: %v", err)
 	}
+	defer pf.Close()
 
 	pid, err := Stop(path, 5*time.Second)
 	if err != nil {
@@ -73,9 +88,11 @@ func TestStopReturnsErrorWhenProcessSurvives(t *testing.T) {
 	}()
 
 	path := filepath.Join(t.TempDir(), "tincan.pid")
-	if err := os.WriteFile(path, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o644); err != nil {
-		t.Fatal(err)
+	pf, err := AcquirePIDFile(path, cmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("acquire pid file: %v", err)
 	}
+	defer pf.Close()
 
 	pid, err := Stop(path, 200*time.Millisecond)
 	if err == nil {

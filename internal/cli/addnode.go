@@ -160,9 +160,11 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		kv("allocated IP", tunnelIP),
 		kv("public key", publicKey),
 	}
-	// For WireGuard clients the private key rides in the artifact(s), so keep it
-	// out of the scrollback as plaintext.
-	if generatedPrivateKey != "" && !wgClient {
+	// Keep the private key out of the scrollback whenever it already rides in
+	// an artifact: the wg-quick QR/conf for a WireGuard client, or the
+	// bootstrap JSON for a tincan client. Only echo it when there is no other
+	// channel (no --bootstrap), so the operator can still transmit it.
+	if generatedPrivateKey != "" && !wgClient && c.Bootstrap == "" {
 		items = append(items, secret("private key", generatedPrivateKey))
 	}
 	p.pairs(items...)

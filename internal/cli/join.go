@@ -14,6 +14,7 @@ import (
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/keys"
+	"golang.org/x/term"
 )
 
 type JoinCmd struct {
@@ -212,6 +213,21 @@ func (c *JoinCmd) readPrivateKey() (string, error) {
 		return trimSecret(string(data)), nil
 	}
 	fmt.Fprint(os.Stderr, "WireGuard private key: ")
+	// Suppress terminal echo so the pasted key doesn't linger on screen or in
+	// scrollback. Falls back to a plain line read when stdin isn't a TTY
+	// (e.g. piped input in scripts/tests), where echo isn't a concern.
+	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		line, err := term.ReadPassword(fd)
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		key := trimSecret(string(line))
+		if key == "" {
+			return "", fmt.Errorf("no private key provided")
+		}
+		return key, nil
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {

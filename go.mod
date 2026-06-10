@@ -12,6 +12,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/net v0.48.0
+	golang.org/x/term v0.38.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 )
 
