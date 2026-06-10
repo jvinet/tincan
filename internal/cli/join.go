@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
+	"strconv"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
 	"github.com/jvinet/tincan/internal/config"
@@ -118,7 +120,34 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 	default:
 		p.hint("Next steps: fill [directory] and verify [drop.client], then run `tincan up`")
 	}
+	firewallHint(p, cfg.Wireguard.ListenPort)
 	return nil
+}
+
+// firewallHint tells the operator which inbound UDP ports a host firewall
+// must allow for direct connectivity. The WireGuard port receives peer
+// handshakes; the discovery port receives LAN beacons. Blocking either
+// degrades the node to relay-only against same-LAN peers — and since the
+// node keeps transmitting beacons and syncing the directory, it looks
+// healthy from the outside, making the failure otherwise silent.
+func firewallHint(p *printer, listenPort int) {
+	if listenPort > 0 {
+		p.hint("Firewall: allow inbound UDP %d (WireGuard handshakes) and UDP %d (LAN discovery beacons) so peers can connect directly", listenPort, discoveryPort())
+		return
+	}
+	p.hint("Firewall: allow inbound UDP %d (LAN discovery beacons) so same-LAN peers can be found", discoveryPort())
+	p.hint("WireGuard will bind a random port; set [wireguard].listen_port and allow it through the firewall so peers can connect directly")
+}
+
+// discoveryPort extracts the beacon port from the default multicast group
+// address, so the hint stays correct if the default ever changes.
+func discoveryPort() int {
+	_, portStr, err := net.SplitHostPort(config.DefaultDiscoveryMulticastIPv4)
+	if err != nil {
+		return 0
+	}
+	port, _ := strconv.Atoi(portStr)
+	return port
 }
 
 func (c *JoinCmd) resolveKeys(bs *bootstrap.Bootstrap) (string, string, error) {
