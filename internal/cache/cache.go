@@ -91,7 +91,7 @@ func ReadState(stateDir string) (State, error) {
 // state.json. The daemon writes it each iteration so `tincan status` can
 // surface what's been learned without holding open a control socket.
 type DiscoveryState struct {
-	UpdatedAt    time.Time                   `json:"updated_at"`
+	UpdatedAt    time.Time                     `json:"updated_at"`
 	LANEndpoints map[string]discovery.LANState `json:"lan_endpoints"`
 }
 

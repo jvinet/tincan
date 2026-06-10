@@ -164,4 +164,3 @@ func (p *printer) pairs(items ...pair) {
 		fmt.Fprintf(p.w, "  %s %s\n", styledLabel, value)
 	}
 }
-
