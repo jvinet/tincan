@@ -133,13 +133,17 @@ func (p *printer) fail(format string, args ...any) {
 }
 
 type pair struct {
-	label  string
-	value  string
-	secret bool
+	label      string
+	value      string
+	secret     bool
+	valueColor string
 }
 
 func kv(label, value string) pair     { return pair{label: label, value: value} }
 func secret(label, value string) pair { return pair{label: label, value: value, secret: true} }
+func kvColor(label, value, color string) pair {
+	return pair{label: label, value: value, valueColor: color}
+}
 
 func (p *printer) pairs(items ...pair) {
 	maxLabel := 0
@@ -154,6 +158,8 @@ func (p *printer) pairs(items ...pair) {
 		value := it.value
 		if it.secret {
 			value = p.style(ansiYellow, value) + " " + p.style(ansiDim, "[secret]")
+		} else if it.valueColor != "" {
+			value = p.style(it.valueColor, value)
 		}
 		fmt.Fprintf(p.w, "  %s %s\n", styledLabel, value)
 	}

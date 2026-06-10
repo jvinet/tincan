@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -133,7 +134,10 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 			out.WireGuard["peer_count"] = len(dev.Peers)
 			out.WireGuard["peers"] = wireGuardPeerStatus(dev.Peers, dir, self)
 			out.WireGuard["type"] = dev.Type.String()
-		} else {
+		} else if !errors.Is(devErr, os.ErrNotExist) {
+			// A missing interface already reads as "network: down"; only
+			// surface errors that say something more (e.g. EPERM when we
+			// lack the privilege to query WireGuard at all).
 			out.WireGuard["error"] = devErr.Error()
 		}
 	} else {
@@ -482,7 +486,10 @@ func statusDiscoveryPairs(m map[string]interface{}) []pair {
 func statusWireguardPairs(m map[string]interface{}) []pair {
 	pairs := []pair{}
 	if v, ok := m["public_key"].(string); ok && v != "" {
+		pairs = append(pairs, kvColor("network", "up", ansiGreen))
 		pairs = append(pairs, kv("public key", v))
+	} else {
+		pairs = append(pairs, kvColor("network", "down", ansiRed))
 	}
 	if v, ok := m["listen_port"].(int); ok {
 		pairs = append(pairs, kv("listen port", fmt.Sprintf("%d", v)))
