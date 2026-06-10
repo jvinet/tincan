@@ -133,9 +133,11 @@ instead so the secret never leaves their machine. The bootstrap file is still
 useful in that case — it just won't contain a private key.
 
 `--endpoint` is optional. Omit it for nodes that sit behind NAT and dial out;
-include `host:port` for nodes that are publicly reachable. A mesh of
-endpoint-less nodes cannot form without a relay, and `tincan status` will warn
-you when it sees that situation.
+include `host:port` for nodes that are publicly reachable. The port you publish
+becomes the node's WireGuard listen port: it travels in the bootstrap so `join`
+binds exactly the port peers are told to reach. A mesh of endpoint-less nodes
+cannot form without a relay, and `tincan status` will warn you when it sees that
+situation.
 
 Other admin commands:
 
@@ -159,7 +161,8 @@ sudo tincan join --bootstrap /tmp/bob.json
 sudo tincan up
 ```
 
-`join --bootstrap` populates `[directory]`, `[drop.client]`, and (if the admin
+`join --bootstrap` populates `[directory]`, `[drop.client]`, the node's
+`listen_port` (when the admin published an endpoint for it), and (if the admin
 generated it) the WireGuard keypair from the bootstrap. Nothing else to edit.
 
 If you don't have a bootstrap file, do it manually:

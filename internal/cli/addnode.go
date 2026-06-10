@@ -37,6 +37,14 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	if err := c.validateFlags(); err != nil {
 		return err
 	}
+	// The endpoint's port is the node's WireGuard listen port: peers reach it
+	// there, so the node must bind that port. Parse it before mutating the
+	// directory so a malformed --endpoint fails fast, and carry it into the
+	// bootstrap so `join` writes it to the client's config.
+	listenPort, err := listenPortFromEndpoint(c.Endpoint)
+	if err != nil {
+		return err
+	}
 	wgClient := c.ClientType == clientWireGuard
 
 	cfg, err := loadConfig(g)
@@ -128,6 +136,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 		node := bootstrap.Node{
 			Name:       c.Name,
 			TunnelIP:   tunnelIP,
+			ListenPort: listenPort,
 			PublicKey:  publicKey,
 			PrivateKey: generatedPrivateKey,
 		}

@@ -25,8 +25,13 @@ type Directory struct {
 }
 
 type Node struct {
-	Name       string `json:"name"`
-	TunnelIP   string `json:"tunnel_ip"`
+	Name     string `json:"name"`
+	TunnelIP string `json:"tunnel_ip"`
+	// ListenPort is the WireGuard listen port for this node, taken from the
+	// port of its published endpoint. Peers reach the node there, so it must
+	// bind it; `join` copies it into the client config. Omitted (0) for NAT'd
+	// nodes without a published endpoint, which bind an ephemeral port.
+	ListenPort int    `json:"listen_port,omitempty"`
 	PublicKey  string `json:"public_key"`
 	PrivateKey string `json:"private_key,omitempty"`
 }

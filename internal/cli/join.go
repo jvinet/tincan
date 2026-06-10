@@ -79,6 +79,13 @@ func (c *JoinCmd) Run(_ context.Context, g *Globals) error {
 		},
 		Drop: dropConfig,
 	}
+	// The admin captured this node's listen port (the port of its published
+	// endpoint) in the bootstrap. Bind it so the node is reachable at the
+	// endpoint peers were given; without it WireGuard would pick an ephemeral
+	// port and inbound handshakes to the published endpoint would fail.
+	if bs != nil && bs.Node != nil {
+		cfg.Wireguard.ListenPort = bs.Node.ListenPort
+	}
 	if c.StateDir != "" && c.StateDir != config.DefaultStateDir {
 		cfg.Sync.StateDir = c.StateDir
 	}
