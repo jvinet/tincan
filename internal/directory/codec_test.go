@@ -480,6 +480,57 @@ func TestFromWireRejectsMalformed(t *testing.T) {
 	}
 }
 
+// Names that are not DNS labels stay legal while no domain is set — anything
+// stricter would brick directories published before the domain existed.
+func TestValidateAcceptsLegacyNamesWithoutDomain(t *testing.T) {
+	dir, _ := sampleDirectory(t)
+	dir.Nodes[0].Name = "My Laptop"
+	if err := Validate(dir); err != nil {
+		t.Fatalf("legacy name rejected without a domain: %v", err)
+	}
+	dir.Nodes[1].Name = "my laptop" // exact-case dup still required to differ
+	if err := Validate(dir); err != nil {
+		t.Fatalf("case-variant names rejected without a domain: %v", err)
+	}
+}
+
+// A sealed directory carries the domain through Seal/Open, and the payload
+// still decodes on a client built before the field existed (unknown msgpack
+// map keys in the signed payload are skipped — schema stays v2).
+func TestDomainRoundTripAndOldClientCompat(t *testing.T) {
+	publisherPub, publisherPriv, err := keys.GenerateEd25519Keypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, identity := sampleDirectory(t)
+	dir.Domain = "vpn.home"
+	blob, err := Seal(dir, publisherPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, payload, err := Open(blob, identity, publisherPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Domain != "vpn.home" {
+		t.Fatalf("domain not preserved: got %q", opened.Domain)
+	}
+	// Simulate a pre-domain client: a Directory struct without the "dom" field.
+	var legacy struct {
+		SchemaVersion uint32    `msgpack:"v"`
+		Serial        uint64    `msgpack:"s"`
+		CreatedAt     time.Time `msgpack:"t"`
+		NetworkCIDR   string    `msgpack:"cidr"`
+		Nodes         []Node    `msgpack:"nodes"`
+	}
+	if err := msgpack.Unmarshal(payload, &legacy); err != nil {
+		t.Fatalf("pre-domain client failed to decode a domain-carrying payload: %v", err)
+	}
+	if legacy.Serial != dir.Serial || len(legacy.Nodes) != len(dir.Nodes) {
+		t.Fatalf("pre-domain decode mangled the payload: %+v", legacy)
+	}
+}
+
 func TestValidateRejectsBadDirectories(t *testing.T) {
 	valid, _ := sampleDirectory(t)
 	cases := []struct {
@@ -501,6 +552,10 @@ func TestValidateRejectsBadDirectories(t *testing.T) {
 		{name: "endpoint newline injection", mutate: func(d *Directory) { d.Nodes[0].Endpoint = "host:51820\nPostUp = evil" }},
 		{name: "observed endpoint malformed", mutate: func(d *Directory) { d.Nodes[1].ObservedEndpoint = "garbage" }},
 		{name: "bad age recipient", mutate: func(d *Directory) { d.Nodes[0].AgeRecipient = "age1notreal" }},
+		{name: "invalid domain", mutate: func(d *Directory) { d.Domain = "not a domain" }},
+		{name: "unnormalized domain", mutate: func(d *Directory) { d.Domain = "VPN.Home" }},
+		{name: "domain with bad node name", mutate: func(d *Directory) { d.Domain = "vpn"; d.Nodes[0].Name = "my laptop" }},
+		{name: "domain with case-colliding names", mutate: func(d *Directory) { d.Domain = "vpn"; d.Nodes[1].Name = "Alice" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

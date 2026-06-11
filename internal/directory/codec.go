@@ -298,6 +298,19 @@ func Validate(dir Directory) error {
 		return fmt.Errorf("invalid network CIDR: %w", err)
 	}
 	prefix = prefix.Masked()
+	// DNS constraints are enforced only when a domain is set, so directories
+	// published before the domain existed (or that never set one) keep opening
+	// with whatever names they have. The only writers of a non-empty Domain —
+	// `init --dns-domain` and `set-domain` — check every name first, so a
+	// legitimately published directory can never trip these checks on a client
+	// (the same publish-time-strictness argument validateEndpoint makes below).
+	var seenLower map[string]string
+	if dir.Domain != "" {
+		if err := ValidateDomain(dir.Domain); err != nil {
+			return fmt.Errorf("invalid VPN domain %q: %v", dir.Domain, err)
+		}
+		seenLower = make(map[string]string, len(dir.Nodes))
+	}
 	seenNames := make(map[string]struct{}, len(dir.Nodes))
 	seenIPs := make(map[string]struct{}, len(dir.Nodes))
 	seenKeys := make(map[string]struct{}, len(dir.Nodes))
@@ -309,6 +322,16 @@ func Validate(dir Directory) error {
 			return fmt.Errorf("duplicate node name %q", node.Name)
 		}
 		seenNames[node.Name] = struct{}{}
+		if dir.Domain != "" {
+			if err := ValidateLabel(node.Name); err != nil {
+				return fmt.Errorf("node name %q is not a valid DNS label (required while domain %q is set): %v", node.Name, dir.Domain, err)
+			}
+			lower := strings.ToLower(node.Name)
+			if prev, ok := seenLower[lower]; ok {
+				return fmt.Errorf("node names %q and %q both resolve as %q", prev, node.Name, lower+"."+dir.Domain)
+			}
+			seenLower[lower] = node.Name
+		}
 		if _, err := keys.ParseWGPublic(node.PublicKey); err != nil {
 			return fmt.Errorf("node %q has invalid WireGuard public key: %w", node.Name, err)
 		}

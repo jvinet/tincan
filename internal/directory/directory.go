@@ -13,7 +13,16 @@ type Directory struct {
 	Serial        uint64    `msgpack:"s"`
 	CreatedAt     time.Time `msgpack:"t"`
 	NetworkCIDR   string    `msgpack:"cidr"`
-	Nodes         []Node    `msgpack:"nodes"`
+	// Domain is the network's optional VPN DNS domain (e.g. "vpn", "vpn.home"),
+	// stored lowercase with no trailing dot. When set, node names become
+	// resolvable as <name>.<domain>: members render the mapping into a managed
+	// /etc/hosts block, hubs answer it over DNS for plain-WireGuard spokes, and
+	// Validate requires every node name to be a usable DNS label. Empty disables
+	// all DNS behavior. The field rides inside the signed payload, where unknown
+	// keys are skipped, so directories that carry it still open on pre-domain
+	// clients (schema stays v2).
+	Domain string `msgpack:"dom,omitempty"`
+	Nodes  []Node `msgpack:"nodes"`
 }
 
 type Node struct {
