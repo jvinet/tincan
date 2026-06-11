@@ -23,11 +23,15 @@ func (c *ListNodesCmd) Run(ctx context.Context, g *Globals) error {
 	}
 	p := newPrinter(os.Stdout)
 	p.section("Directory")
-	p.pairs(
+	dirPairs := []pair{
 		kv("serial", fmt.Sprintf("%d", dir.Serial)),
 		kv("network", dir.NetworkCIDR),
 		kv("nodes", fmt.Sprintf("%d", len(dir.Nodes))),
-	)
+	}
+	if dir.Domain != "" {
+		dirPairs = append(dirPairs, kv("domain", dir.Domain))
+	}
+	p.pairs(dirPairs...)
 	p.blank()
 	p.section("Nodes")
 	rows := [][]tableCell{{

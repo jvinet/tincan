@@ -58,6 +58,9 @@ func (c *DownCmd) Run(_ context.Context, g *Globals) error {
 		if errors.As(err, &notFound) {
 			slog.Info("interface already down", "interface", cfg.Wireguard.Interface)
 			p.headline("interface %s is already down", cfg.Wireguard.Interface)
+			// Even with no interface to drop, stale VPN DNS entries (e.g. from
+			// an earlier unclean stop) must not outlive the tunnel.
+			removeHostsBlock(cfg, p)
 			return nil
 		}
 		slog.Error("teardown failed", "interface", cfg.Wireguard.Interface, "error", err)
@@ -65,5 +68,6 @@ func (c *DownCmd) Run(_ context.Context, g *Globals) error {
 	}
 	slog.Info("brought down interface", "interface", cfg.Wireguard.Interface)
 	p.headline("bringing down interface %s", cfg.Wireguard.Interface)
+	removeHostsBlock(cfg, p)
 	return nil
 }

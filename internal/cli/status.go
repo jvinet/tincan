@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/daemon"
 	"github.com/jvinet/tincan/internal/directory"
+	"github.com/jvinet/tincan/internal/hosts"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
@@ -31,6 +33,7 @@ type statusOutput struct {
 	Drop         map[string]interface{} `json:"drop"`
 	WireGuard    map[string]interface{} `json:"wireguard"`
 	Discovery    map[string]interface{} `json:"discovery,omitempty"`
+	DNS          map[string]interface{} `json:"dns,omitempty"`
 	NATWarning   string                 `json:"nat_warning,omitempty"`
 	StaleWarning string                 `json:"stale_warning,omitempty"`
 }
@@ -134,6 +137,9 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 	}
 	dir, _, _ := cache.Read(cfg.Sync.StateDir)
 	self, _ := findSelf(cfg, dir)
+	if dir.Domain != "" {
+		out.DNS = dnsStatusFields(cfg, dir)
+	}
 	if client, err := wgctrl.New(); err == nil {
 		dev, devErr := client.Device(cfg.Wireguard.Interface)
 		_ = client.Close()
@@ -354,6 +360,12 @@ func printStatusText(out statusOutput) {
 		p.pairs(statusDiscoveryPairs(out.Discovery)...)
 	}
 
+	if len(out.DNS) > 0 {
+		p.blank()
+		p.section("DNS")
+		p.pairs(statusDNSPairs(out.DNS)...)
+	}
+
 	if peers, ok := out.WireGuard["peers"].([]statusPeer); ok && len(peers) > 0 {
 		p.blank()
 		p.section("Peers")
@@ -482,6 +494,63 @@ func discoveryStatusFields(state cache.DiscoveryState, nodesByPubkey map[string]
 	out["lan_endpoints"] = entries
 	out["count"] = len(entries)
 	return out
+}
+
+// dnsStatusFields reports the VPN DNS state visible from this node: the
+// domain, and whether the managed hosts block matches the cached directory.
+// The check is read-only (hosts.Rewrite, never a write from status).
+func dnsStatusFields(cfg *config.Config, dir directory.Directory) map[string]interface{} {
+	out := map[string]interface{}{
+		"domain":        dir.Domain,
+		"hosts_managed": cfg.DNS.ManageHostsEnabled(),
+	}
+	if !cfg.DNS.ManageHostsEnabled() {
+		return out
+	}
+	path := hostsPath(cfg)
+	out["hosts_path"] = path
+	block := hosts.Block(dir)
+	out["hosts_entries"] = strings.Count(block, "\n")
+	content, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		out["hosts_error"] = err.Error()
+		return out
+	}
+	_, changed, err := hosts.Rewrite(content, block)
+	if err != nil {
+		out["hosts_error"] = err.Error()
+		return out
+	}
+	out["hosts_applied"] = !changed
+	return out
+}
+
+func statusDNSPairs(m map[string]interface{}) []pair {
+	pairs := []pair{}
+	if v, ok := m["domain"].(string); ok && v != "" {
+		pairs = append(pairs, kv("domain", v))
+	}
+	if v, ok := m["hosts_managed"].(bool); ok && !v {
+		pairs = append(pairs, kv("hosts file", "unmanaged ([dns] manage_hosts = false)"))
+		return pairs
+	}
+	if v, ok := m["hosts_path"].(string); ok && v != "" {
+		pairs = append(pairs, kv("hosts file", v))
+	}
+	if v, ok := m["hosts_entries"].(int); ok {
+		pairs = append(pairs, kv("entries", fmt.Sprintf("%d", v)))
+	}
+	if v, ok := m["hosts_applied"].(bool); ok {
+		if v {
+			pairs = append(pairs, kvColor("hosts entries", "current", ansiGreen))
+		} else {
+			pairs = append(pairs, kvColor("hosts entries", "out of date (daemon applies them on its next sync)", ansiYellow))
+		}
+	}
+	if v, ok := m["hosts_error"].(string); ok && v != "" {
+		pairs = append(pairs, kv("hosts error", v))
+	}
+	return pairs
 }
 
 func statusDiscoveryPairs(m map[string]interface{}) []pair {
