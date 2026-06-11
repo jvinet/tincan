@@ -89,6 +89,38 @@ func TestRenderNodeWritesConfig(t *testing.T) {
 	}
 }
 
+// A directory carrying a VPN domain renders spoke configs that point DNS at
+// the hub's tunnel IP with the domain as a search domain.
+func TestRenderNodeEmitsDNSWithDomain(t *testing.T) {
+	admin, dir := testFlowConfigAndDirectory(t, 1)
+	dir.Domain = "vpn"
+	dir.Nodes[0].Endpoint = "alice.example:51820"
+	dir.Nodes[0].Relay = true
+	_, pub, err := keys.GenerateWGKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir.Nodes = append(dir.Nodes, directory.Node{Name: "phone", PublicKey: pub, TunnelIP: "10.42.0.50"})
+	publishTestDirectory(t, admin, dir)
+	adminCfg := filepath.Join(t.TempDir(), "admin.toml")
+	if err := config.Save(adminCfg, *admin); err != nil {
+		t.Fatal(err)
+	}
+
+	confPath := filepath.Join(t.TempDir(), "phone.conf")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-c", adminCfg, "render-node", "--name", "phone", "--wg-config", confPath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("render-node exit=%d stderr=%q", code, stderr.String())
+	}
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "DNS = 10.42.0.1, vpn\n") {
+		t.Fatalf("rendered config missing the DNS line:\n%s", data)
+	}
+}
+
 func TestRenderNodeRejectsMismatchedKey(t *testing.T) {
 	adminCfg, _ := renderNodeFixture(t)
 	wrongPriv, _, err := keys.GenerateWGKeypair()

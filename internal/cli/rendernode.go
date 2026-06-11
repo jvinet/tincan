@@ -67,7 +67,7 @@ func (c *RenderNodeCmd) Run(ctx context.Context, g *Globals) error {
 	if node.PublicKey == hub.PublicKey {
 		return fmt.Errorf("node %q is itself the hub/relay; hub-and-spoke configs are for spoke nodes", c.Name)
 	}
-	wgConf := renderWGQuickConfig(c.PrivateKey, node.TunnelIP, dir.NetworkCIDR, hub)
+	wgConf := renderWGQuickConfig(c.PrivateKey, node.TunnelIP, dir.NetworkCIDR, dir.Domain, hub)
 
 	if c.WGQRPNG != "" {
 		png, err := qrPNG(wgConf, 512)
@@ -105,6 +105,9 @@ func (c *RenderNodeCmd) Run(ctx context.Context, g *Globals) error {
 		kv("tunnel IP", node.TunnelIP),
 		kv("hub peer", fmt.Sprintf("%s (%s)", hub.Name, hub.Endpoint)),
 		kv("routes", dir.NetworkCIDR),
+	}
+	if dir.Domain != "" {
+		artifacts = append(artifacts, kv("DNS", fmt.Sprintf("%s (search domain %s)", hub.TunnelIP, dir.Domain)))
 	}
 	if c.WGQRPNG != "" {
 		artifacts = append(artifacts, kv("QR PNG", c.WGQRPNG))

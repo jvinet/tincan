@@ -33,10 +33,18 @@ func peerHub(dir directory.Directory, selfPubKey string) (directory.Node, bool) 
 // owner completes locally. add-node always passes the freshly generated key,
 // so it never hits the placeholder path.
 //
+// When the directory carries a VPN domain, the config names the hub's tunnel
+// IP as the DNS server (the hub runs tincan's listener) plus the domain as a
+// search domain — wg-quick and the mobile apps treat non-IP DNS entries as
+// search domains, so both "nas" and "nas.<domain>" resolve. Mobile apps
+// apply that server as the device's ONLY resolver while the tunnel is up,
+// which is why the hub's listener forwards non-VPN queries upstream rather
+// than refusing them.
+//
 // The result is a point-in-time snapshot. Such a client does not run Tincan, so
 // it will not track later directory changes (rotated keys, new or moved
-// endpoints, membership) — re-enroll it to refresh.
-func renderWGQuickConfig(privateKey, tunnelIP, networkCIDR string, hub directory.Node) string {
+// endpoints, membership, the domain) — re-enroll it to refresh.
+func renderWGQuickConfig(privateKey, tunnelIP, networkCIDR, domain string, hub directory.Node) string {
 	var b strings.Builder
 	b.WriteString("[Interface]\n")
 	if privateKey == "" {
@@ -45,6 +53,9 @@ func renderWGQuickConfig(privateKey, tunnelIP, networkCIDR string, hub directory
 		fmt.Fprintf(&b, "PrivateKey = %s\n", privateKey)
 	}
 	fmt.Fprintf(&b, "Address = %s/32\n", tunnelIP)
+	if domain != "" {
+		fmt.Fprintf(&b, "DNS = %s, %s\n", hub.TunnelIP, domain)
+	}
 	b.WriteString("\n[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", hub.PublicKey)
 	if hub.PSK != "" {

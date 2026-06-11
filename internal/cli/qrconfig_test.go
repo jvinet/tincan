@@ -75,7 +75,8 @@ func TestWriteSecretFile(t *testing.T) {
 
 func TestRenderWGQuickConfig(t *testing.T) {
 	hub := directory.Node{Name: "gw", PublicKey: "HUBPUB", Endpoint: "vpn.example.com:51820"}
-	got := renderWGQuickConfig("PRIVKEY", "10.42.0.5", "10.42.0.0/24", hub)
+	// No domain: byte-identical to the pre-DNS output.
+	got := renderWGQuickConfig("PRIVKEY", "10.42.0.5", "10.42.0.0/24", "", hub)
 	want := "[Interface]\n" +
 		"PrivateKey = PRIVKEY\n" +
 		"Address = 10.42.0.5/32\n" +
@@ -89,9 +90,26 @@ func TestRenderWGQuickConfig(t *testing.T) {
 	}
 }
 
+func TestRenderWGQuickConfigWithDomain(t *testing.T) {
+	hub := directory.Node{Name: "gw", PublicKey: "HUBPUB", TunnelIP: "10.42.0.1", Endpoint: "vpn.example.com:51820"}
+	got := renderWGQuickConfig("PRIVKEY", "10.42.0.5", "10.42.0.0/24", "vpn", hub)
+	want := "[Interface]\n" +
+		"PrivateKey = PRIVKEY\n" +
+		"Address = 10.42.0.5/32\n" +
+		"DNS = 10.42.0.1, vpn\n" +
+		"\n[Peer]\n" +
+		"PublicKey = HUBPUB\n" +
+		"Endpoint = vpn.example.com:51820\n" +
+		"AllowedIPs = 10.42.0.0/24\n" +
+		"PersistentKeepalive = 25\n"
+	if got != want {
+		t.Fatalf("config mismatch:\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestRenderWGQuickConfigWithPSK(t *testing.T) {
 	hub := directory.Node{Name: "gw", PublicKey: "HUBPUB", Endpoint: "vpn.example.com:51820", PSK: "SECRETPSK"}
-	got := renderWGQuickConfig("PRIVKEY", "10.42.0.5", "10.42.0.0/24", hub)
+	got := renderWGQuickConfig("PRIVKEY", "10.42.0.5", "10.42.0.0/24", "", hub)
 	if !strings.Contains(got, "PresharedKey = SECRETPSK\n") {
 		t.Fatalf("expected PresharedKey line, got:\n%s", got)
 	}
@@ -166,7 +184,7 @@ func reconstructBitmap(t *testing.T, out string, color bool) [][]bool {
 func TestEmitQRTerminalRoundTrip(t *testing.T) {
 	content := renderWGQuickConfig(
 		"oK3bF8Wc2pQ7rT5vY1nM4kJ6hG9dS0aZ8xC3bV7eR0=",
-		"10.42.0.9", "10.42.0.0/24",
+		"10.42.0.9", "10.42.0.0/24", "",
 		directory.Node{Name: "gw", PublicKey: "aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aB4c=", Endpoint: "vpn.example.com:51820"},
 	)
 	want := mustBitmap(t, content)

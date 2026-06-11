@@ -138,7 +138,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	// is no command to regenerate a plain-WireGuard config for an existing node).
 	wgConf := ""
 	if wgClient {
-		wgConf = renderWGQuickConfig(generatedPrivateKey, tunnelIP, dir.NetworkCIDR, hub)
+		wgConf = renderWGQuickConfig(generatedPrivateKey, tunnelIP, dir.NetworkCIDR, dir.Domain, hub)
 		if c.WGQRPNG != "" {
 			png, err := qrPNG(wgConf, 512)
 			if err != nil {
@@ -220,6 +220,9 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 			kv("mode", "hub-and-spoke"),
 			kv("hub peer", fmt.Sprintf("%s (%s)", hub.Name, hub.Endpoint)),
 			kv("routes", dir.NetworkCIDR),
+		}
+		if dir.Domain != "" {
+			artifacts = append(artifacts, kv("DNS", fmt.Sprintf("%s (search domain %s)", hub.TunnelIP, dir.Domain)))
 		}
 		if c.WGQRPNG != "" {
 			artifacts = append(artifacts, kv("QR PNG", c.WGQRPNG))
