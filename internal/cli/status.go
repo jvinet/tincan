@@ -14,6 +14,7 @@ import (
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/daemon"
 	"github.com/jvinet/tincan/internal/directory"
+	"github.com/jvinet/tincan/internal/dnsserve"
 	"github.com/jvinet/tincan/internal/hosts"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -138,7 +139,7 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 	dir, _, _ := cache.Read(cfg.Sync.StateDir)
 	self, _ := findSelf(cfg, dir)
 	if dir.Domain != "" {
-		out.DNS = dnsStatusFields(cfg, dir)
+		out.DNS = dnsStatusFields(cfg, dir, self)
 	}
 	if client, err := wgctrl.New(); err == nil {
 		dev, devErr := client.Device(cfg.Wireguard.Interface)
@@ -497,12 +498,31 @@ func discoveryStatusFields(state cache.DiscoveryState, nodesByPubkey map[string]
 }
 
 // dnsStatusFields reports the VPN DNS state visible from this node: the
-// domain, and whether the managed hosts block matches the cached directory.
-// The check is read-only (hosts.Rewrite, never a write from status).
-func dnsStatusFields(cfg *config.Config, dir directory.Directory) map[string]interface{} {
+// domain, whether the managed hosts block matches the cached directory (a
+// read-only hosts.Rewrite check — status never writes), and the listener's
+// serving policy with a live probe. The daemon runs in another process, so
+// an actual query is the only honest liveness check.
+func dnsStatusFields(cfg *config.Config, dir directory.Directory, self directory.Node) map[string]interface{} {
 	out := map[string]interface{}{
 		"domain":        dir.Domain,
 		"hosts_managed": cfg.DNS.ManageHostsEnabled(),
+	}
+	switch {
+	case shouldServeDNS(cfg, dir, self):
+		policy := "hub (auto)"
+		if cfg.DNS.Serve != nil {
+			policy = "forced on"
+		}
+		out["server"] = policy
+		if self.TunnelIP != "" {
+			addr := net.JoinHostPort(self.TunnelIP, "53")
+			out["server_addr"] = addr
+			out["server_listening"] = dnsserve.Probe(addr, dir.Domain, 500*time.Millisecond)
+		}
+	case cfg.DNS.Serve != nil && !*cfg.DNS.Serve:
+		out["server"] = "off ([dns] serve = false)"
+	default:
+		out["server"] = "off (not a hub)"
 	}
 	if !cfg.DNS.ManageHostsEnabled() {
 		return out
@@ -529,6 +549,17 @@ func statusDNSPairs(m map[string]interface{}) []pair {
 	pairs := []pair{}
 	if v, ok := m["domain"].(string); ok && v != "" {
 		pairs = append(pairs, kv("domain", v))
+	}
+	if v, ok := m["server"].(string); ok && v != "" {
+		pairs = append(pairs, kv("server", v))
+	}
+	if v, ok := m["server_listening"].(bool); ok {
+		addr, _ := m["server_addr"].(string)
+		if v {
+			pairs = append(pairs, kvColor("listening", addr, ansiGreen))
+		} else {
+			pairs = append(pairs, kvColor("listening", "no ("+addr+" did not answer; daemon running?)", ansiYellow))
+		}
 	}
 	if v, ok := m["hosts_managed"].(bool); ok && !v {
 		pairs = append(pairs, kv("hosts file", "unmanaged ([dns] manage_hosts = false)"))

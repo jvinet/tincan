@@ -18,6 +18,7 @@ import (
 	"github.com/jvinet/tincan/internal/daemon"
 	"github.com/jvinet/tincan/internal/directory"
 	"github.com/jvinet/tincan/internal/discovery"
+	"github.com/jvinet/tincan/internal/dnsserve"
 	"github.com/jvinet/tincan/internal/relay"
 	"github.com/jvinet/tincan/internal/wg"
 )
@@ -108,6 +109,9 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 		return err
 	}
 	(&hostsSyncer{}).sync(cfg, dir, p)
+	if shouldServeDNS(cfg, dir, self) {
+		p.hint("This node is the network's VPN DNS hub; the DNS listener runs only in daemon mode (`tincan up --daemon`)")
+	}
 	slog.Info("up complete", "interface", cfg.Wireguard.Interface, "tunnel_ip", self.TunnelIP, "peers", len(dir.Nodes)-1)
 	p.headline("setting IP address: %s", tunnelDisplay(self.TunnelIP, dir.NetworkCIDR))
 	return nil
@@ -149,6 +153,8 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	slog.Info("daemon loop started", "pid", os.Getpid(), "config", configPath)
 	prevModes := map[string]relay.Mode{}
 	hSync := &hostsSyncer{}
+	dnsMgr := &dnsServerManager{}
+	defer dnsMgr.stop()
 	// endpointPushedAt records, per peer pubkey, when Apply last pushed an
 	// endpoint into the kernel from configuration. Endpoint observation
 	// consults it so only endpoints validated by a later handshake are ever
@@ -161,7 +167,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			perr.fail("failed to load config; %v", err)
 		} else {
 			timeout := iterationTimeout(cfg.Sync.Interval.Or(config.DefaultInterval))
-			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes, lanStore, &dirHolder, endpointPushedAt, hSync); err != nil {
+			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes, lanStore, &dirHolder, endpointPushedAt, hSync, dnsMgr, dirSource); err != nil {
 				slog.Warn("daemon iteration failed", "error", err)
 				perr.fail("daemon iteration failed; %v", err)
 			}
@@ -251,7 +257,7 @@ func waitForReconcile(ctx context.Context, sigCh <-chan os.Signal, wakeCh <-chan
 	}
 }
 
-func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer, controller *relay.Controller, prevModes map[string]relay.Mode, lanStore *discovery.Store, dirHolder *atomic.Pointer[directory.Directory], endpointPushedAt map[string]time.Time, hSync *hostsSyncer) error {
+func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Duration, p *printer, controller *relay.Controller, prevModes map[string]relay.Mode, lanStore *discovery.Store, dirHolder *atomic.Pointer[directory.Directory], endpointPushedAt map[string]time.Time, hSync *hostsSyncer, dnsMgr *dnsServerManager, dirSource dnsserve.DirectorySource) error {
 	res, err := runSyncOnce(ctx, cfg, timeout)
 	if err != nil {
 		return err
@@ -311,6 +317,9 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	// applied — names pointing at tunnel IPs the kernel doesn't route are
 	// worse than no names.
 	hSync.sync(cfg, res.Directory, p)
+	if dnsMgr != nil {
+		dnsMgr.reconcile(ctx, cfg, res.Directory, self, dirSource, p)
+	}
 	if lanStore != nil {
 		if port, err := manager.ListenPort(); err == nil {
 			lanStore.SetSelf(self.PublicKey, port)
