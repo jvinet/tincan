@@ -51,6 +51,10 @@ one; set `[sync] max_directory_age` to also warn when the directory's
   established (symmetric NAT, same-LAN hairpin, etc.) clients route the
   affected peer's traffic through the admin node and continue to re-probe
   the direct path on network changes. See [Relay fallback](#relay-fallback).
+- Optional VPN DNS names: set a network domain (`tincan set-domain vpn`)
+  and every node resolves as `<name>.<domain>` — members via a managed
+  `/etc/hosts` block, plain-WireGuard spokes via a small DNS server on the
+  hub. See [VPN DNS names](#vpn-dns-names).
 
 ## Requirements
 
@@ -499,6 +503,91 @@ need to touch these.
 - Only one LAN endpoint per peer is tracked; multi-homed peers (Wi-Fi +
   Ethernet on the same device) settle to whichever beacon arrives first.
 
+## VPN DNS names
+
+Set a non-public domain for the network and every node becomes reachable by
+name:
+
+```sh
+# on the admin (or at first setup: tincan init --dns-domain vpn ...)
+tincan set-domain vpn
+```
+
+```sh
+ping nas.vpn
+ssh alice.vpn
+```
+
+The domain lives in the signed directory, so it propagates like any other
+change: members pick it up within one sync interval. `tincan set-domain`
+with no argument shows the current domain from any node; `--clear` turns
+the feature off network-wide. Setting a domain requires every node name to
+be a valid DNS label (letters, digits, hyphens; ≤63 chars) — `set-domain`
+refuses with a list of offenders otherwise, and `add-node` enforces the
+rule for all new names so this never regresses.
+
+Tincan members and plain-WireGuard spokes get names through two different
+(deliberately independent) mechanisms:
+
+**Members: a managed `/etc/hosts` block.** Every member already holds the
+full name → tunnel-IP mapping — it's the directory it decrypts on every
+sync — so no DNS server is involved at all. The daemon maintains a marker-
+delimited block after each successful apply:
+
+```
+# BEGIN tincan managed block - do not edit between markers
+10.42.0.1	alice.vpn
+10.42.0.3	nas.vpn
+# END tincan managed block
+```
+
+Entries are FQDN-only on purpose: if your machines already map bare names
+like `nas` to LAN addresses in `/etc/hosts`, tincan never shadows them.
+Everything outside the markers is preserved byte-for-byte; the block is
+updated atomically, only when its content actually changed, and removed on
+`tincan down` or after `set-domain --clear`. Resolution works offline
+(it's a file), survives daemon restarts, and needs no resolver
+configuration. A symlinked `/etc/hosts` (NixOS) is detected and left
+alone, with a warning.
+
+**Spokes: DNS served by the hub.** Phones and other plain-WireGuard
+clients can't run tincan, so their rendered configs (add-node /
+render-node) gain a line when a domain is set:
+
+```
+DNS = 10.42.0.1, vpn
+```
+
+That's the hub's tunnel IP plus the domain as a search domain (so `nas`
+works as well as `nas.vpn`). The hub's daemon serves the domain on UDP 53
+of its tunnel IP, answering from its cached directory. Mobile WireGuard
+apps route *all* device DNS through that server while the tunnel is up, so
+the hub forwards everything outside the domain to an upstream resolver —
+by default the first nameserver in its own `/etc/resolv.conf`, overridable
+with `[dns] upstream`.
+
+The listener runs automatically on hub nodes only (the `--relay` node, or
+the implicit relay target spokes were enrolled against) and only in daemon
+mode. Force it on or off anywhere with `[dns] serve`. If something already
+occupies port 53 on the hub (Pi-hole, dnsmasq), tincan warns once and
+retries each sync; point `[dns] upstream` at that resident resolver if you
+want VPN queries answered by tincan and the rest by it.
+
+### Limitations
+
+- Spoke configs are point-in-time snapshots: a domain set, cleared, or a
+  hub moved after enrollment needs a re-render (`tincan render-node`).
+  Clearing the domain is the sharp edge — spokes keep sending all their
+  DNS to a hub that no longer answers, so `set-domain --clear` lists the
+  affected spokes loudly.
+- Names map to IPv4 tunnel IPs only (AAAA queries return empty NOERROR so
+  dual-stack clients fall through to A cleanly).
+- The hub's listener is UDP-only; single-record answers always fit. See
+  `spec/dns.md` for the full design.
+- Upgrade the **admin node first**: an older admin binary republishing the
+  directory (e.g. endpoint observation) doesn't know the domain field and
+  would silently drop it.
+
 ## Dead-drop backends
 
 Every config has two drop sections: `[drop.admin]` is how this node writes the
@@ -619,6 +708,13 @@ multicast_ipv4  = "239.255.84.67:51821"
 multicast_ipv6  = "[ff02::1:8443]:51821"
 beacon_interval = "30s"        # steady-state cadence
 beacon_ttl      = "90s"        # learned endpoint expiry (must be >= 2x beacon_interval)
+
+[dns]                          # VPN DNS names; active only when the directory has a domain
+manage_hosts = true            # default on; maintain the managed /etc/hosts block
+# serve      = true            # force the DNS listener on/off; unset = auto (hubs only)
+# upstream   = "192.168.1.1"   # where the hub forwards non-VPN queries (host[:port],
+                               # port 53 implied; default: first resolv.conf nameserver)
+# hosts_path = "/etc/hosts"    # override the hosts file (tests, exotic layouts)
 ```
 
 Defaults are populated automatically; you usually only need to set
@@ -627,6 +723,8 @@ Defaults are populated automatically; you usually only need to set
 ## Files Tincan touches
 
 - `/etc/tincan/config.toml` — primary config, mode `0600`
+- `/etc/hosts` — managed block between markers, only while the directory
+  carries a VPN domain (see "VPN DNS names")
 - `/var/lib/tincan/cache.bin` — last successfully-applied directory
 - `/var/lib/tincan/cache.serial` — monotonic serial guard against rollback
 - `/var/lib/tincan/state.json` — sync metadata (last sync time, ETag)
