@@ -120,7 +120,7 @@ func TestControllerRelaysAfterDirectFailure(t *testing.T) {
 	}, now)
 
 	// Advance time past DirectFailedAfter with no handshake refresh.
-	later := now.Add(3 * time.Minute)
+	later := now.Add(5 * time.Minute)
 	dec := c.Update(self, dir, []wgtypes.Peer{
 		{PublicKey: wgKey(t, peerPub), LastHandshakeTime: now}, // stale
 		{PublicKey: wgKey(t, relayPub), LastHandshakeTime: later},

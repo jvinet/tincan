@@ -9,6 +9,7 @@ import (
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
 	"github.com/jvinet/tincan/internal/keys"
+	"github.com/jvinet/tincan/internal/relay"
 	"github.com/vishvananda/netlink"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -138,11 +139,12 @@ func mergeAgainstKernel(client *wgctrl.Client, iface string, peers []wgtypes.Pee
 	return appendDeletions(peers, dev.Peers)
 }
 
-// handshakeFreshWindow mirrors relay.DefaultDirectFailedAfter: while a
-// kernel peer's last handshake is younger than this, its current path
-// works and its endpoint is left alone; once older, the relay controller
-// considers the path dead and Apply resumes pushing endpoint picks.
-const handshakeFreshWindow = 90 * time.Second
+// handshakeFreshWindow is relay.DefaultDirectFailedAfter: while a kernel
+// peer's last handshake is younger than this, its current path works and
+// its endpoint is left alone; once older, the relay controller considers
+// the path dead and Apply resumes pushing endpoint picks. The two must
+// agree, or Apply would overwrite endpoints the controller still trusts.
+const handshakeFreshWindow = relay.DefaultDirectFailedAfter
 
 // preserveLiveEndpoints clears the Endpoint on any PeerConfig whose kernel
 // peer completed a handshake within handshakeFreshWindow. A fresh handshake

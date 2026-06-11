@@ -50,7 +50,19 @@ const (
 	// handshake before we declare the direct path broken (in DIRECT mode) or
 	// consider it viable again (in RELAYED mode, looking at shadow-peer
 	// handshakes).
-	DefaultDirectFailedAfter = 90 * time.Second
+	//
+	// The floor is set by WireGuard's timers, not by taste: a healthy session
+	// re-handshakes only when the sender's keypair outlives REKEY_AFTER_TIME
+	// (120s) — up to ~165s when the responder side is the one sending — so
+	// handshake ages past two minutes are routine on a live path.
+	// REJECT_AFTER_TIME (180s) is the structural ceiling: past it the session
+	// itself has expired, and a live peer (keepalives guarantee send
+	// attempts) would have completed a new handshake already. A threshold
+	// below that ceiling demotes healthy paths, and a one-sided demotion
+	// doesn't degrade to relay — it blackholes the pair in both directions,
+	// because the far side keeps routing direct and cryptokey routing drops
+	// each side's half of the asymmetric path.
+	DefaultDirectFailedAfter = 180 * time.Second
 
 	// DefaultDirectGracePeriod gives the kernel time to complete a handshake
 	// after entering DIRECT before we evaluate liveness. Without this, a

@@ -413,10 +413,13 @@ fallback](#relay-fallback) takes over automatically.
 
 ## Relay fallback
 
-If the direct peer-to-peer path stays broken (no handshake for ~90s while
-keepalives go out), each client switches that peer to **relayed** mode:
-the admin's `AllowedIPs` is widened to cover the peer's tunnel IP, so data
-packets flow through the admin instead. The peer's own entry stays in the
+If the direct peer-to-peer path stays broken (no handshake for 3 minutes
+while keepalives go out), each client switches that peer to **relayed**
+mode. The threshold sits above WireGuard's own rekey cadence on purpose: a
+healthy session re-handshakes only every ~2 minutes, so shorter thresholds
+would demote working paths. On demotion, the admin's `AllowedIPs` is
+widened to cover the peer's tunnel IP, so data packets flow through the
+admin instead. The peer's own entry stays in the
 local WireGuard config but with empty `AllowedIPs` — kernel keepalives keep
 attempting handshakes to its endpoint in the background, while no actual
 data routes through it. This is the **shadow peer**: a probe channel that
@@ -426,7 +429,11 @@ The moment one of those background handshakes succeeds, the daemon
 observes a fresh `LastHandshakeTime` via wgctrl and flips the peer back to
 direct — just by reshuffling `AllowedIPs`, no peer add/remove. There are
 no timed probes, no flapping; recovery happens whenever the kernel
-manages to handshake.
+manages to handshake. Relay state is re-evaluated every 30 seconds,
+independent of `[sync].interval`: both ends of a pair judge the same
+handshake evidence, so the short cadence keeps their verdicts converged —
+a one-sided relay decision blocks traffic in both directions until the
+other side catches up.
 
 The relay target is the node marked `--relay` (at `init` or `add-node`), or — if
 none is marked — the first node in the directory with a public `Endpoint`. The
@@ -453,8 +460,8 @@ or keepalive, since a background probe could never complete.
 
 `tincan status` shows the chosen mode per peer (`direct` or `relayed via X`).
 Per-peer mode lives in daemon memory; on daemon restart all peers start in
-direct mode and converge to relayed within ~90s if the direct path is
-broken.
+direct mode and converge to relayed within ~3 minutes if the direct path
+is broken.
 
 ### Limitations
 

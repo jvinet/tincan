@@ -135,6 +135,8 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 
 	controller := relay.NewController(relay.Config{})
 	wakeCh := make(chan string, 1)
+	relayTicker := time.NewTicker(relayTickInterval)
+	defer relayTicker.Stop()
 
 	watchCtx, stopWatch := context.WithCancel(ctx)
 	defer stopWatch()
@@ -176,9 +178,15 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 		if cfg != nil {
 			interval = cfg.Sync.Interval.Or(config.DefaultInterval)
 		}
+		var onTick func()
+		if cfg != nil {
+			onTick = func() {
+				runRelayTick(cfg, controller, prevModes, lanStore, &dirHolder, endpointPushedAt, pout)
+			}
+		}
 		// Jitter ±10% so a fleet started from one image (e.g. a reboot that
 		// brings every node up together) doesn't hammer the drop in lockstep.
-		proceed, err := waitForReconcile(ctx, sigCh, wakeCh, jitter(interval), minWakeInterval, time.Now(), pout)
+		proceed, err := waitForReconcile(ctx, sigCh, wakeCh, relayTicker.C, onTick, jitter(interval), minWakeInterval, time.Now(), pout)
 		if !proceed {
 			return err
 		}
@@ -202,11 +210,25 @@ func jitter(d time.Duration) time.Duration {
 // fetches. SIGHUP and the regular interval are never debounced.
 const minWakeInterval = 10 * time.Second
 
+// relayTickInterval is how often the daemon re-runs the relay state machine
+// and re-applies the result between drop syncs. Both ends of a pair judge
+// the same evidence — their shared handshake times — so a short cadence
+// bounds how far apart their verdicts can drift: a genuine failure demotes
+// on both sides within one tick of the threshold, and a wrong demotion
+// (which blackholes the pair in both directions, since the far side still
+// routes direct) heals at the next tick instead of lingering for a full
+// sync interval. Ticks touch only local wgctrl/netlink state; they never
+// fetch the drop.
+const relayTickInterval = 30 * time.Second
+
 // waitForReconcile blocks until the daemon should reconcile again — the sync
 // interval elapsed, a SIGHUP arrived, or a wake fired (debounced to at most
-// one per minWakeInterval). It returns proceed=false with the error the
-// daemon loop should return (nil for a clean shutdown signal).
-func waitForReconcile(ctx context.Context, sigCh <-chan os.Signal, wakeCh <-chan string, interval, minWake time.Duration, lastReconcile time.Time, p *printer) (bool, error) {
+// one per minWakeInterval). While waiting it services relay ticks: each fire
+// of tickCh invokes onTick inline, on this goroutine, so relay liveness runs
+// on its own cadence without triggering a drop fetch. It returns
+// proceed=false with the error the daemon loop should return (nil for a
+// clean shutdown signal).
+func waitForReconcile(ctx context.Context, sigCh <-chan os.Signal, wakeCh <-chan string, tickCh <-chan time.Time, onTick func(), interval, minWake time.Duration, lastReconcile time.Time, p *printer) (bool, error) {
 	intervalDeadline := lastReconcile.Add(interval)
 	timer := time.NewTimer(time.Until(intervalDeadline))
 	defer timer.Stop()
@@ -226,6 +248,10 @@ func waitForReconcile(ctx context.Context, sigCh <-chan os.Signal, wakeCh <-chan
 				slog.Info("received shutdown signal", "signal", sig.String())
 				p.hint("received shutdown signal (%s)", sig.String())
 				return false, nil
+			}
+		case <-tickCh:
+			if onTick != nil {
+				onTick()
 			}
 		case reason := <-wakeCh:
 			wakeDeadline := lastReconcile.Add(minWake)
@@ -278,40 +304,9 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 	if err != nil {
 		return err
 	}
-	manager, err := wg.NewManager(cfg.Wireguard)
+	manager, decision, err := reconcileRelay(cfg, controller, prevModes, lanStore, self, res.Directory, endpointPushedAt, p)
 	if err != nil {
 		return err
-	}
-	if err := manager.Up(); err != nil {
-		return err
-	}
-	peers, err := manager.Peers()
-	if err != nil {
-		// Pre-existing interface state isn't a hard failure on the very first
-		// iteration; treat the snapshot as empty and continue.
-		peers = nil
-	}
-	decision := controller.Update(self, res.Directory, peers, time.Now())
-	if lanStore != nil {
-		markLANFailures(decision.PeerStates, prevModes, lanStore, time.Now())
-	}
-	logRelayTransitions(p, res.Directory, decision, prevModes)
-	var lanLookup wg.LANEndpointLookup
-	if lanStore != nil {
-		lanLookup = func(pubkey string, staleOK bool) string {
-			if staleOK {
-				return lanStore.LookupLastKnown(pubkey)
-			}
-			return lanStore.Lookup(pubkey, time.Now())
-		}
-	}
-	pushed, applyErr := manager.Apply(self, res.Directory, decision.Relayed, lanLookup)
-	// Record push times before acting on the error: once ConfigureDevice
-	// succeeded the endpoints are in the kernel, and observation must not
-	// treat them as wire-derived even if a later Apply step failed.
-	recordEndpointPushes(endpointPushedAt, pushed, res.Directory, time.Now())
-	if applyErr != nil {
-		return applyErr
 	}
 	// Hosts entries must only ever reflect a directory that was successfully
 	// applied — names pointing at tunnel IPs the kernel doesn't route are
@@ -361,6 +356,65 @@ func runDaemonIteration(ctx context.Context, cfg *config.Config, timeout time.Du
 		}
 	}
 	return nil
+}
+
+// reconcileRelay runs one pass of the relay state machine and applies the
+// outcome to the kernel: snapshot wgctrl, advance the controller, blacklist
+// LAN endpoints that just failed, rebuild peer configs, Apply. It is the
+// shared core of the full daemon iteration and the between-sync relay tick;
+// it never touches the drop.
+func reconcileRelay(cfg *config.Config, controller *relay.Controller, prevModes map[string]relay.Mode, lanStore *discovery.Store, self directory.Node, dir directory.Directory, endpointPushedAt map[string]time.Time, p *printer) (*wg.Manager, relay.Decision, error) {
+	manager, err := wg.NewManager(cfg.Wireguard)
+	if err != nil {
+		return nil, relay.Decision{}, err
+	}
+	if err := manager.Up(); err != nil {
+		return nil, relay.Decision{}, err
+	}
+	peers, err := manager.Peers()
+	if err != nil {
+		// Pre-existing interface state isn't a hard failure on the very first
+		// iteration; treat the snapshot as empty and continue.
+		peers = nil
+	}
+	decision := controller.Update(self, dir, peers, time.Now())
+	if lanStore != nil {
+		markLANFailures(decision.PeerStates, prevModes, lanStore, time.Now())
+	}
+	logRelayTransitions(p, dir, decision, prevModes)
+	var lanLookup wg.LANEndpointLookup
+	if lanStore != nil {
+		lanLookup = func(pubkey string, staleOK bool) string {
+			if staleOK {
+				return lanStore.LookupLastKnown(pubkey)
+			}
+			return lanStore.Lookup(pubkey, time.Now())
+		}
+	}
+	pushed, applyErr := manager.Apply(self, dir, decision.Relayed, lanLookup)
+	// Record push times before acting on the error: once ConfigureDevice
+	// succeeded the endpoints are in the kernel, and observation must not
+	// treat them as wire-derived even if a later Apply step failed.
+	recordEndpointPushes(endpointPushedAt, pushed, dir, time.Now())
+	return manager, decision, applyErr
+}
+
+// runRelayTick re-evaluates relay state against the last synced directory,
+// between drop syncs. Failures are logged, not fatal: the next tick or full
+// iteration repairs whatever this one could not.
+func runRelayTick(cfg *config.Config, controller *relay.Controller, prevModes map[string]relay.Mode, lanStore *discovery.Store, dirHolder *atomic.Pointer[directory.Directory], endpointPushedAt map[string]time.Time, p *printer) {
+	dirPtr := dirHolder.Load()
+	if dirPtr == nil {
+		return // nothing synced yet; the first full iteration seeds the directory
+	}
+	self, err := findSelf(cfg, *dirPtr)
+	if err != nil {
+		slog.Debug("relay tick skipped", "error", err)
+		return
+	}
+	if _, _, err := reconcileRelay(cfg, controller, prevModes, lanStore, self, *dirPtr, endpointPushedAt, p); err != nil {
+		slog.Warn("relay tick failed", "error", err)
+	}
 }
 
 // recordEndpointPushes stamps the push time for every peer whose endpoint

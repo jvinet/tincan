@@ -224,7 +224,7 @@ trust model beacons already rely on.
 ### Working paths are never overwritten
 
 `Apply` pushes the chosen endpoint to the kernel only when the peer's
-last handshake is older than 90s (matching the relay controller's
+last handshake is older than 3 minutes (matching the relay controller's
 `DirectFailedAfter`) or the peer is new. A fresh handshake proves the
 kernel's current endpoint works — often one the kernel roamed to (e.g. a
 same-LAN source address) that appears in no directory and no store — and

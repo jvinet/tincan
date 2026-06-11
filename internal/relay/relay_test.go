@@ -46,10 +46,10 @@ func TestDecideDirectBecomesRelayedWhenHandshakeStale(t *testing.T) {
 		Now: now,
 		Previous: PeerState{
 			Mode:      ModeDirect,
-			EnteredAt: now.Add(-3 * time.Minute),
+			EnteredAt: now.Add(-10 * time.Minute),
 		},
 		Peer: wgtypes.Peer{
-			LastHandshakeTime: now.Add(-2 * time.Minute),
+			LastHandshakeTime: now.Add(-4 * time.Minute),
 		},
 	}, Config{})
 	if got.Mode != ModeRelayed {
@@ -60,13 +60,35 @@ func TestDecideDirectBecomesRelayedWhenHandshakeStale(t *testing.T) {
 	}
 }
 
+func TestDecideDirectToleratesRekeyCadence(t *testing.T) {
+	// A healthy WireGuard session re-handshakes only when the keypair
+	// outlives REKEY_AFTER_TIME (120s), so handshake ages of ~2-2.5 minutes
+	// are routine on a perfectly live path. Regression: a threshold below
+	// that cadence demoted healthy pairs, and a one-sided demotion blackholes
+	// the pair in both directions.
+	now := time.Now()
+	got := Decide(Inputs{
+		Now: now,
+		Previous: PeerState{
+			Mode:      ModeDirect,
+			EnteredAt: now.Add(-time.Hour),
+		},
+		Peer: wgtypes.Peer{
+			LastHandshakeTime: now.Add(-150 * time.Second),
+		},
+	}, Config{})
+	if got.Mode != ModeDirect {
+		t.Fatalf("Mode=%v want direct (150s handshake age is normal rekey cadence)", got.Mode)
+	}
+}
+
 func TestDecideDirectBecomesRelayedWhenNeverHandshookPastFailure(t *testing.T) {
 	now := time.Now()
 	got := Decide(Inputs{
 		Now: now,
 		Previous: PeerState{
 			Mode:      ModeDirect,
-			EnteredAt: now.Add(-2 * time.Minute), // past DirectFailedAfter (90s)
+			EnteredAt: now.Add(-4 * time.Minute), // past DirectFailedAfter (180s)
 		},
 		Peer: wgtypes.Peer{},
 	}, Config{})
