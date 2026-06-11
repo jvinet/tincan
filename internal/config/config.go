@@ -254,6 +254,43 @@ func (c Config) Validate(allowIncomplete bool) error {
 	if err := validateDiscovery(c.Discovery); err != nil {
 		return fmt.Errorf("[discovery]: %w", err)
 	}
+	if err := validateDNS(c.DNS); err != nil {
+		return fmt.Errorf("[dns]: %w", err)
+	}
+	return nil
+}
+
+func validateDNS(d DNSConfig) error {
+	if d.Upstream != "" {
+		if err := validateHostPort(d.Upstream); err != nil {
+			return fmt.Errorf("upstream: %w", err)
+		}
+	}
+	if d.HostsPath != "" && !filepath.IsAbs(d.HostsPath) {
+		return fmt.Errorf("hosts_path %q must be absolute", d.HostsPath)
+	}
+	return nil
+}
+
+// validateHostPort accepts "host" (port 53 implied) or "host:port", the same
+// convention the dns drop's resolver field uses.
+func validateHostPort(addr string) error {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		host, portStr = addr, ""
+	}
+	if host == "" {
+		return fmt.Errorf("%q has empty host", addr)
+	}
+	if strings.ContainsAny(host, " \t\n") {
+		return fmt.Errorf("invalid host in %q", addr)
+	}
+	if portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("invalid port in %q", addr)
+		}
+	}
 	return nil
 }
 

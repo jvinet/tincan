@@ -138,6 +138,63 @@ func TestObserveEnabledRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDNSSectionRoundTrip(t *testing.T) {
+	if !(DNSConfig{}).ManageHostsEnabled() {
+		t.Fatal("manage_hosts should default to enabled when unset")
+	}
+	disabled := false
+	if (DNSConfig{ManageHosts: &disabled}).ManageHostsEnabled() {
+		t.Fatal("manage_hosts should report disabled when set false")
+	}
+
+	cfg := validConfig(t)
+	serve := true
+	cfg.DNS = DNSConfig{ManageHosts: &disabled, Serve: &serve, Upstream: "1.1.1.1", HostsPath: "/tmp/hosts"}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DNS.ManageHostsEnabled() || loaded.DNS.Serve == nil || !*loaded.DNS.Serve {
+		t.Fatalf("dns section did not round-trip: %+v", loaded.DNS)
+	}
+	if loaded.DNS.Upstream != "1.1.1.1" || loaded.DNS.HostsPath != "/tmp/hosts" {
+		t.Fatalf("dns section did not round-trip: %+v", loaded.DNS)
+	}
+}
+
+func TestValidateRejectsBadDNSSection(t *testing.T) {
+	cases := []struct {
+		name string
+		dns  DNSConfig
+	}{
+		{name: "upstream bad port", dns: DNSConfig{Upstream: "1.1.1.1:99999"}},
+		{name: "upstream empty host", dns: DNSConfig{Upstream: ":53"}},
+		{name: "upstream whitespace", dns: DNSConfig{Upstream: "not a host"}},
+		{name: "relative hosts_path", dns: DNSConfig{HostsPath: "etc/hosts"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig(t)
+			cfg.DNS = tc.dns
+			if err := cfg.Validate(false); err == nil || !strings.Contains(err.Error(), "[dns]") {
+				t.Fatalf("expected [dns] validation error, got %v", err)
+			}
+		})
+	}
+	// Accepted forms: bare host (port 53 implied), host:port, bracketed IPv6.
+	for _, upstream := range []string{"1.1.1.1", "dns.example.com:5353", "[fd00::1]:53", ""} {
+		cfg := validConfig(t)
+		cfg.DNS = DNSConfig{Upstream: upstream}
+		if err := cfg.Validate(false); err != nil {
+			t.Fatalf("upstream %q rejected: %v", upstream, err)
+		}
+	}
+}
+
 func TestRejectMismatchedWGKeys(t *testing.T) {
 	cfg := validConfig(t)
 	_, cfg.Wireguard.PublicKey, _ = keys.GenerateWGKeypair()

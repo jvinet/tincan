@@ -28,6 +28,7 @@ type Config struct {
 	Sync      SyncConfig      `toml:"sync,omitempty"`
 	Observe   ObserveConfig   `toml:"observe,omitempty"`
 	Discovery DiscoveryConfig `toml:"discovery,omitempty"`
+	DNS       DNSConfig       `toml:"dns,omitempty"`
 }
 
 type WireguardConfig struct {
@@ -147,6 +148,34 @@ func (d DiscoveryConfig) IsEnabled() bool {
 		return true
 	}
 	return *d.Enabled
+}
+
+// DNSConfig governs VPN DNS naming, which activates only when the directory
+// carries a domain (`tincan set-domain`). See spec/dns.md.
+type DNSConfig struct {
+	// ManageHosts controls the managed /etc/hosts block that maps every
+	// node's <name>.<domain> to its tunnel IP. Defaults on; the block exists
+	// only while the directory carries a domain.
+	ManageHosts *bool `toml:"manage_hosts,omitempty"`
+	// Serve forces the VPN DNS listener on or off. Unset means auto: serve
+	// only when this node is a hub (its Relay flag is set, or it is the
+	// network's relay target) — the node plain-WireGuard spokes were pointed
+	// at when their configs were rendered.
+	Serve *bool `toml:"serve,omitempty"`
+	// Upstream is where the listener proxies queries outside the VPN domain
+	// (spokes send all their DNS through the tunnel), host[:port] with port
+	// 53 implied. Empty means the first nameserver in /etc/resolv.conf.
+	Upstream string `toml:"upstream,omitempty"`
+	// HostsPath overrides the hosts file the managed block lives in.
+	// Default /etc/hosts; mainly for tests and exotic layouts.
+	HostsPath string `toml:"hosts_path,omitempty"`
+}
+
+// ManageHostsEnabled reports whether the daemon should maintain the managed
+// hosts block. Defaults to on when the [dns] section is absent or omits the
+// field — a domain published by the admin should "just work" on members.
+func (d DNSConfig) ManageHostsEnabled() bool {
+	return d.ManageHosts == nil || *d.ManageHosts
 }
 
 type OptionalDuration struct {
