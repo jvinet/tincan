@@ -20,6 +20,7 @@ type InitCmd struct {
 	CIDR       string `default:"10.42.0.0/24" help:"Tunnel network CIDR."`
 	Endpoint   string `help:"Published endpoint for this node, as host:port."`
 	Relay      bool   `help:"Mark this admin node as a relay: peers route through it when a direct path is unavailable (requires --endpoint)."`
+	DNSDomain  string `name:"dns-domain" help:"Optional VPN DNS domain (e.g. \"vpn\"): node names resolve as <name>.<domain> across the network."`
 	StateDir   string `type:"path" help:"Directory for the cache and sibling state files (default /var/lib/tincan)."`
 	FullConfig bool   `help:"Write every applicable section and field at its default, not just the fields likely to be changed."`
 	Force      bool   `help:"Overwrite an existing config."`
@@ -55,6 +56,15 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	}
 	if c.Relay && c.Endpoint == "" {
 		return fmt.Errorf("--relay requires --endpoint host:port: a relay must publish a reachable address")
+	}
+	if c.DNSDomain != "" {
+		c.DNSDomain = directory.NormalizeDomain(c.DNSDomain)
+		if err := directory.ValidateDomain(c.DNSDomain); err != nil {
+			return fmt.Errorf("--dns-domain %q: %v", c.DNSDomain, err)
+		}
+		if err := directory.ValidateLabel(c.Name); err != nil {
+			return fmt.Errorf("--name %q is not a valid DNS label, required with --dns-domain: %v", c.Name, err)
+		}
 	}
 	stateDir := config.DefaultStateDir
 	if c.StateDir != "" {
@@ -93,6 +103,7 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 		Serial:        1,
 		CreatedAt:     directory.Stamp(),
 		NetworkCIDR:   c.CIDR,
+		Domain:        c.DNSDomain,
 		Nodes: []directory.Node{{
 			Name:         c.Name,
 			PublicKey:    wgPub,
@@ -124,7 +135,11 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	)
 	p.blank()
 	p.section("Tunnel")
-	p.pairs(kv("allocated IP", tunnelIP))
+	tunnelPairs := []pair{kv("allocated IP", tunnelIP)}
+	if c.DNSDomain != "" {
+		tunnelPairs = append(tunnelPairs, kv("VPN domain", c.DNSDomain))
+	}
+	p.pairs(tunnelPairs...)
 	p.blank()
 	p.section("WireGuard keypair")
 	p.pairs(

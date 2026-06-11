@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
 	"github.com/jvinet/tincan/internal/cache"
@@ -66,6 +67,20 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	}
 	if _, _, ok := nodeByName(dir, c.Name); ok {
 		return fmt.Errorf("node %q already exists", c.Name)
+	}
+	// New names must always be usable as DNS labels, domain or not — otherwise
+	// every name minted today is a rename `set-domain` forces tomorrow. Names
+	// that predate this rule stay valid in domain-less directories (Validate
+	// only enforces labels once a domain is set).
+	if err := directory.ValidateLabel(c.Name); err != nil {
+		return fmt.Errorf("node name %q: %v (names are used as DNS labels)", c.Name, err)
+	}
+	if dir.Domain != "" {
+		for _, node := range dir.Nodes {
+			if strings.EqualFold(node.Name, c.Name) {
+				return fmt.Errorf("node name %q collides with %q: DNS names are case-insensitive while domain %q is set", c.Name, node.Name, dir.Domain)
+			}
+		}
 	}
 	publicKey := c.PubKey
 	generatedPrivateKey := ""
