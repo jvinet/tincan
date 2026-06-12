@@ -53,10 +53,10 @@ type Flusher interface {
 }
 
 // Config selects and configures a provider. Token authenticates the
-// single-token providers (Linode, DigitalOcean). OVH instead authenticates
-// with AppKey/AppSecret/ConsumerKey and selects a regional API endpoint by
-// name (Endpoint, e.g. "ovh-eu"). BaseURL and HTTPClient are optional
-// overrides used by tests.
+// single-token providers (Linode, DigitalOcean, Cloudflare). OVH instead
+// authenticates with AppKey/AppSecret/ConsumerKey and selects a regional API
+// endpoint by name (Endpoint, e.g. "ovh-eu"). BaseURL and HTTPClient are
+// optional overrides used by tests.
 type Config struct {
 	Name  string
 	Token string
@@ -80,6 +80,8 @@ func New(cfg Config) (Provider, error) {
 		return newLinode(cfg), nil
 	case "digitalocean":
 		return newDigitalOcean(cfg), nil
+	case "cloudflare":
+		return newCloudflare(cfg), nil
 	case "ovh":
 		o, err := newOVH(cfg)
 		if err != nil {
@@ -95,7 +97,7 @@ func New(cfg Config) (Provider, error) {
 // validation to reject typos early.
 func Supported(name string) bool {
 	switch name {
-	case "linode", "digitalocean", "ovh":
+	case "linode", "digitalocean", "cloudflare", "ovh":
 		return true
 	default:
 		return false

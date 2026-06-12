@@ -36,7 +36,7 @@ one; set `[sync] max_directory_age` to also warn when the directory's
 - Single Go binary: `tincan`
 - Linux client/admin support
 - Dead-drop backends: S3-compatible object storage, HTTP (read-only for
-  clients), DNS TXT records (Linode, DigitalOcean, or OVH), and local
+  clients), DNS TXT records (Linode, DigitalOcean, Cloudflare, or OVH), and local
   filesystem (e.g. shared NFS/SMB mount)
 - Signed (Ed25519) and age-encrypted directory blobs
 - Full-mesh WireGuard peer configuration via `wgctrl`/netlink (no `wg-quick`)
@@ -678,7 +678,7 @@ the admin needs provider credentials, used to write the records.
 ```toml
 [drop.admin]
 type = "dns"
-provider = "digitalocean"     # or "linode"
+provider = "digitalocean"     # or "linode", "cloudflare"
 zone = "example.com"          # a DNS zone hosted at the provider
 record_name = "_tincan"       # host label the TXT records live at (default "_tincan")
 api_token = "..."             # provider API token with DNS write access
@@ -697,8 +697,9 @@ Clients never set a `provider` or any write credentials — they just resolve
 
 Supported providers and how they authenticate:
 
-- **`linode`, `digitalocean`** — a single `api_token` (shown above), scoped to
-  DNS/domain write access.
+- **`linode`, `digitalocean`, `cloudflare`** — a single `api_token` (shown
+  above), scoped to DNS write access. For Cloudflare, create an API token with
+  the Zone:Read and DNS:Edit permissions on the zone.
 - **`ovh`** — OVH signs each request with three application credentials and a
   regional endpoint rather than a bearer token:
 
