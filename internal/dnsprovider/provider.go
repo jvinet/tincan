@@ -58,6 +58,8 @@ func New(cfg Config) (Provider, error) {
 	switch cfg.Name {
 	case "linode":
 		return newLinode(cfg), nil
+	case "digitalocean":
+		return newDigitalOcean(cfg), nil
 	default:
 		return nil, fmt.Errorf("unsupported dns provider %q", cfg.Name)
 	}
@@ -67,9 +69,27 @@ func New(cfg Config) (Provider, error) {
 // validation to reject typos early.
 func Supported(name string) bool {
 	switch name {
-	case "linode":
+	case "linode", "digitalocean":
 		return true
 	default:
 		return false
+	}
+}
+
+// statusError maps an HTTP response status onto the package's sentinel errors
+// (ErrAuth, ErrNotFound) or, for any other non-2xx, a formatted error naming
+// the provider and the human-readable reason extracted from body. The status
+// mapping is identical across providers; only the error wording differs, so
+// each provider passes its own name and body-reason extractor.
+func statusError(provider string, status int, body []byte, reason func([]byte) string) error {
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return ErrAuth
+	case status == http.StatusNotFound:
+		return ErrNotFound
+	case status < 200 || status >= 300:
+		return fmt.Errorf("%s API status %d: %s", provider, status, reason(body))
+	default:
+		return nil
 	}
 }

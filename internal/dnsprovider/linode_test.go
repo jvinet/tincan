@@ -153,7 +153,7 @@ func TestNewUnsupportedProvider(t *testing.T) {
 	if _, err := New(Config{Name: "route53"}); err == nil {
 		t.Fatal("expected error for unsupported provider")
 	}
-	if Supported("route53") || !Supported("linode") {
+	if Supported("route53") || !Supported("linode") || !Supported("digitalocean") {
 		t.Fatal("Supported() returned wrong result")
 	}
 }
