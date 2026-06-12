@@ -43,12 +43,32 @@ type Provider interface {
 	DeleteTXT(ctx context.Context, zone, id string) error
 }
 
-// Config selects and configures a provider. Name and Token are required for
-// real use; BaseURL and HTTPClient are optional overrides used by tests.
+// Flusher is implemented by providers whose record writes are staged and must
+// be committed with a separate call after a batch of changes — OVH's zone
+// "refresh". The dns drop calls Flush once, after it has reconciled all
+// records and only if it changed any. Providers that apply writes immediately
+// (Linode, DigitalOcean) do not implement it, and the drop skips the call.
+type Flusher interface {
+	Flush(ctx context.Context, zone string) error
+}
+
+// Config selects and configures a provider. Token authenticates the
+// single-token providers (Linode, DigitalOcean). OVH instead authenticates
+// with AppKey/AppSecret/ConsumerKey and selects a regional API endpoint by
+// name (Endpoint, e.g. "ovh-eu"). BaseURL and HTTPClient are optional
+// overrides used by tests.
 type Config struct {
-	Name       string
-	Token      string
-	TTL        int
+	Name  string
+	Token string
+	TTL   int
+
+	// OVH application credentials and regional endpoint name (e.g. "ovh-eu").
+	// Unused by the token providers.
+	AppKey      string
+	AppSecret   string
+	ConsumerKey string
+	Endpoint    string
+
 	BaseURL    string
 	HTTPClient *http.Client
 }
@@ -60,6 +80,12 @@ func New(cfg Config) (Provider, error) {
 		return newLinode(cfg), nil
 	case "digitalocean":
 		return newDigitalOcean(cfg), nil
+	case "ovh":
+		o, err := newOVH(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return o, nil
 	default:
 		return nil, fmt.Errorf("unsupported dns provider %q", cfg.Name)
 	}
@@ -69,7 +95,7 @@ func New(cfg Config) (Provider, error) {
 // validation to reject typos early.
 func Supported(name string) bool {
 	switch name {
-	case "linode", "digitalocean":
+	case "linode", "digitalocean", "ovh":
 		return true
 	default:
 		return false

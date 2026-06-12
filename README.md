@@ -36,8 +36,8 @@ one; set `[sync] max_directory_age` to also warn when the directory's
 - Single Go binary: `tincan`
 - Linux client/admin support
 - Dead-drop backends: S3-compatible object storage, HTTP (read-only for
-  clients), DNS TXT records (Linode or DigitalOcean), and local filesystem
-  (e.g. shared NFS/SMB mount)
+  clients), DNS TXT records (Linode, DigitalOcean, or OVH), and local
+  filesystem (e.g. shared NFS/SMB mount)
 - Signed (Ed25519) and age-encrypted directory blobs
 - Full-mesh WireGuard peer configuration via `wgctrl`/netlink (no `wg-quick`)
 - Explicit `up` / `down` / `sync` lifecycle, plus a daemon mode that reconciles
@@ -673,7 +673,7 @@ Syncthing, etc.).
 The directory can live in a DNS zone you control as a set of TXT records.
 Clients read it with an ordinary DNS lookup — **no credentials and no provider
 account** — which makes this the lightest-weight backend for client nodes. Only
-the admin needs an API token, used to write the records through a DNS provider.
+the admin needs provider credentials, used to write the records.
 
 ```toml
 [drop.admin]
@@ -691,14 +691,36 @@ record_name = "_tincan"
 # resolver = "1.1.1.1"        # optional: query this resolver (host[:port]) instead of the system one
 ```
 
-Clients never set `provider`/`api_token` — they just resolve
+Clients never set a `provider` or any write credentials — they just resolve
 `<record_name>.<zone>`. A `[drop.admin]` without a provider is read-only (like
-`http`), so admins must set both `provider` and `api_token` to `publish`.
+`http`), so admins must configure a provider to `publish`.
 
-Supported providers are `linode` and `digitalocean`; both authenticate with a
-single API token (`Authorization: Bearer`), so create one scoped to DNS/domain
-write access. The zone must already be hosted at the provider — tincan writes
-records into it but does not create the zone.
+Supported providers and how they authenticate:
+
+- **`linode`, `digitalocean`** — a single `api_token` (shown above), scoped to
+  DNS/domain write access.
+- **`ovh`** — OVH signs each request with three application credentials and a
+  regional endpoint rather than a bearer token:
+
+  ```toml
+  [drop.admin]
+  type = "dns"
+  provider = "ovh"
+  endpoint = "ovh-eu"        # OVH API region: ovh-eu (default), ovh-ca, ovh-us
+  zone = "example.com"
+  record_name = "_tincan"
+  app_key = "..."
+  app_secret = "..."
+  consumer_key = "..."
+  # ttl = 300
+  ```
+
+  Create the keys at OVH's token page (e.g. `https://eu.api.ovh.com/createToken/`)
+  and grant the consumer key `GET`/`POST`/`PUT`/`DELETE` on `/domain/zone/*`.
+  The `[drop.client]` side is identical to the example above (no credentials).
+
+The zone must already be hosted at the provider — tincan writes records into it
+but does not create the zone.
 
 The sealed directory is base64-encoded and split across multiple TXT records
 (each ≤255 bytes), tagged so clients reassemble them in order and ignore any

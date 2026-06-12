@@ -69,9 +69,13 @@ func NewDNS(cfg config.DropBackend) (*DNS, error) {
 	}
 	if cfg.Provider != "" {
 		p, err := dnsprovider.New(dnsprovider.Config{
-			Name:  cfg.Provider,
-			Token: cfg.APIToken,
-			TTL:   cfg.TTL,
+			Name:        cfg.Provider,
+			Token:       cfg.APIToken,
+			AppKey:      cfg.AppKey,
+			AppSecret:   cfg.AppSecret,
+			ConsumerKey: cfg.ConsumerKey,
+			Endpoint:    cfg.Endpoint,
+			TTL:         cfg.TTL,
 		})
 		if err != nil {
 			return nil, err
@@ -106,21 +110,34 @@ func (d *DNS) Put(ctx context.Context, data []byte) error {
 	// Reconcile in place: reuse existing records by index, create any shortfall,
 	// delete the surplus. This minimizes churn and avoids a window where the
 	// record set is empty.
+	changed := false
 	for i, value := range desired {
 		switch {
 		case i >= len(existing):
 			if err := d.provider.CreateTXT(ctx, d.zone, d.name, value); err != nil {
 				return mapProviderErr(err)
 			}
+			changed = true
 		case existing[i].Value != value:
 			if err := d.provider.UpdateTXT(ctx, d.zone, existing[i].ID, value); err != nil {
 				return mapProviderErr(err)
 			}
+			changed = true
 		}
 	}
 	for i := len(desired); i < len(existing); i++ {
 		if err := d.provider.DeleteTXT(ctx, d.zone, existing[i].ID); err != nil {
 			return mapProviderErr(err)
+		}
+		changed = true
+	}
+	// Some providers (OVH) stage edits and only serve them after an explicit
+	// commit. Flush once, after the batch, and only if we changed anything.
+	if changed {
+		if f, ok := d.provider.(dnsprovider.Flusher); ok {
+			if err := f.Flush(ctx, d.zone); err != nil {
+				return mapProviderErr(err)
+			}
 		}
 	}
 	return nil

@@ -353,7 +353,7 @@ func validateDropBackend(b DropBackend) error {
 		if b.Path == "" {
 			return errors.New("path is required for file drops")
 		}
-		return rejectBackendFields("path", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
+		return rejectBackendFields("path", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password, b.Provider, b.Zone, b.RecordName, b.APIToken, b.AppKey, b.AppSecret, b.ConsumerKey, b.Resolver)
 	case "http":
 		if b.URL == "" {
 			return errors.New("url is required for http drops")
@@ -372,7 +372,7 @@ func validateDropBackend(b DropBackend) error {
 		if hasCreds && u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
 			return errors.New("http drop sends credentials in cleartext; use https (or omit credentials)")
 		}
-		return rejectBackendFields("url/username/password", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
+		return rejectBackendFields("url/username/password", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.AppKey, b.AppSecret, b.ConsumerKey, b.Resolver)
 	case "s3":
 		if b.Endpoint == "" {
 			return errors.New("endpoint is required for s3 drops")
@@ -383,22 +383,42 @@ func validateDropBackend(b DropBackend) error {
 		if (b.AccessKey == "") != (b.SecretKey == "") {
 			return errors.New("access_key and secret_key must be provided together")
 		}
-		return rejectBackendFields("endpoint/region/bucket/object_key/access_key/secret_key/tls", b.URL, b.Username, b.Password, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.Resolver)
+		return rejectBackendFields("endpoint/region/bucket/object_key/access_key/secret_key/tls", b.URL, b.Username, b.Password, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.AppKey, b.AppSecret, b.ConsumerKey, b.Resolver)
 	case "dns":
 		if b.Zone == "" {
 			return errors.New("zone is required for dns drops")
 		}
-		if b.Provider != "" {
+		switch b.Provider {
+		case "":
+			// Read-only client side: no write credentials of any kind.
+			if b.APIToken != "" || b.AppKey != "" || b.AppSecret != "" || b.ConsumerKey != "" {
+				return errors.New("dns write credentials are set but no provider is configured")
+			}
+			if b.Endpoint != "" {
+				return errors.New("endpoint is only used by the ovh dns provider")
+			}
+		case "ovh":
+			if b.AppKey == "" || b.AppSecret == "" || b.ConsumerKey == "" {
+				return errors.New("ovh dns provider requires app_key, app_secret, and consumer_key")
+			}
+			if b.APIToken != "" {
+				return errors.New("api_token is not used by the ovh dns provider; use app_key/app_secret/consumer_key")
+			}
+		default: // token providers (linode, digitalocean)
 			if !dnsprovider.Supported(b.Provider) {
 				return fmt.Errorf("unsupported dns provider %q", b.Provider)
 			}
 			if b.APIToken == "" {
 				return fmt.Errorf("api_token is required for dns provider %q", b.Provider)
 			}
-		} else if b.APIToken != "" {
-			return errors.New("api_token is set but no provider is configured")
+			if b.AppKey != "" || b.AppSecret != "" || b.ConsumerKey != "" {
+				return fmt.Errorf("app_key/app_secret/consumer_key are only used by the ovh dns provider, not %q", b.Provider)
+			}
+			if b.Endpoint != "" {
+				return fmt.Errorf("endpoint is only used by the ovh dns provider, not %q", b.Provider)
+			}
 		}
-		return rejectBackendFields("provider/zone/record_name/api_token/ttl/resolver", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password, b.Path)
+		return rejectBackendFields("provider/zone/record_name/api_token/app_key/app_secret/consumer_key/endpoint/ttl/resolver", b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password, b.Path)
 	default:
 		return fmt.Errorf("unsupported type %q", b.Type)
 	}
