@@ -36,7 +36,8 @@ one; set `[sync] max_directory_age` to also warn when the directory's
 - Single Go binary: `tincan`
 - Linux client/admin support
 - Dead-drop backends: S3-compatible object storage, HTTP (read-only for
-  clients), and local filesystem (e.g. shared NFS/SMB mount)
+  clients), DNS TXT records (Linode or OVH), and local filesystem (e.g.
+  shared NFS/SMB mount)
 - Signed (Ed25519) and age-encrypted directory blobs
 - Full-mesh WireGuard peer configuration via `wgctrl`/netlink (no `wg-quick`)
 - Explicit `up` / `down` / `sync` lifecycle, plus a daemon mode that reconciles
@@ -667,6 +668,68 @@ path = "/mnt/shared/tincan/directory.bin"
 Useful for testing or when every node mounts a shared filesystem (NFS, SMB,
 Syncthing, etc.).
 
+### DNS TXT records
+
+The directory can live in a DNS zone you control as a set of TXT records.
+Clients read it with an ordinary DNS lookup — **no credentials and no provider
+account** — which makes this the lightest-weight backend for client nodes. Only
+the admin needs provider credentials, used to write the records.
+
+```toml
+[drop.admin]
+type = "dns"
+provider = "linode"
+zone = "example.com"          # a DNS zone hosted at the provider
+record_name = "_tincan"       # host label the TXT records live at (default "_tincan")
+api_token = "..."             # provider API token with DNS write access
+# ttl = 300                   # optional record TTL in seconds
+
+[drop.client]
+type = "dns"
+zone = "example.com"
+record_name = "_tincan"
+# resolver = "1.1.1.1"        # optional: query this resolver (host[:port]) instead of the system one
+```
+
+Clients never set a `provider` or any write credentials — they just resolve
+`<record_name>.<zone>`. A `[drop.admin]` without a provider is read-only (like
+`http`), so admins must configure a provider to `publish`.
+
+Supported providers and how they authenticate:
+
+- **`linode`** — a single `api_token` (shown above), scoped to DNS/domain
+  write access.
+- **`ovh`** — OVH signs each request with three application credentials and a
+  regional endpoint rather than a bearer token:
+
+  ```toml
+  [drop.admin]
+  type = "dns"
+  provider = "ovh"
+  endpoint = "ovh-eu"        # OVH API region: ovh-eu (default), ovh-ca, ovh-us
+  zone = "example.com"
+  record_name = "_tincan"
+  app_key = "..."
+  app_secret = "..."
+  consumer_key = "..."
+  # ttl = 300
+  ```
+
+  Create the keys at OVH's token page (e.g. `https://eu.api.ovh.com/createToken/`)
+  and grant the consumer key `GET`/`POST`/`PUT`/`DELETE` on `/domain/zone/*`.
+  The `[drop.client]` side is identical to the example above (no credentials).
+
+The zone must already be hosted at the provider — tincan writes records into it
+but does not create the zone.
+
+The sealed directory is base64-encoded and split across multiple TXT records
+(each ≤255 bytes), tagged so clients reassemble them in order and ignore any
+unrelated TXT records at the same name. Publishing is not atomic: during DNS
+propagation a client that reads a half-updated set fails to reassemble or verify
+it, keeps its cached directory, and picks up the change on the next sync — so a
+short `ttl` is worthwhile. A directory needing more than ~100 records (≈16 KB, a
+large network) is rejected; use S3 or HTTP for that.
+
 ## Configuration reference
 
 `tincan` reads `/etc/tincan/config.toml` by default; override with
@@ -689,7 +752,7 @@ publisher_pubkey = "..."                   # admin's Ed25519 public key (every n
 publisher_key    = "..."                   # admin's Ed25519 private key (admins only)
 
 [drop.admin]    # admin-only: where this node writes the directory
-type = "s3"   # or "http" / "file" — see backend sections above
+type = "s3"   # or "http" / "dns" / "file" — see backend sections above
 # ...backend-specific fields...
 
 [drop.client]   # how every node reads the directory

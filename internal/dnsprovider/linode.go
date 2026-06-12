@@ -190,23 +190,10 @@ func (l *linode) do(ctx context.Context, method, url, xfilter string, body any) 
 	if err != nil {
 		return nil, fmt.Errorf("read linode response: %w", err)
 	}
-	if err := statusError(resp.StatusCode, data); err != nil {
+	if err := statusError("linode", resp.StatusCode, data, linodeErrReason); err != nil {
 		return nil, err
 	}
 	return data, nil
-}
-
-func statusError(status int, body []byte) error {
-	switch {
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return ErrAuth
-	case status == http.StatusNotFound:
-		return ErrNotFound
-	case status < 200 || status >= 300:
-		return fmt.Errorf("linode API status %d: %s", status, linodeErrReason(body))
-	default:
-		return nil
-	}
 }
 
 // linodeErrReason extracts the human-readable reason(s) from a Linode error

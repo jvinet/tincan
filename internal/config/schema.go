@@ -75,15 +75,20 @@ type DropBackend struct {
 
 	Path string `toml:"path,omitempty" json:"path,omitempty"`
 
-	// DNS-specific fields. Provider and APIToken are needed only on the write
-	// (admin) side; clients read the zone with a plain DNS lookup using just
-	// Zone and RecordName.
-	Provider   string `toml:"provider,omitempty" json:"provider,omitempty"`
-	Zone       string `toml:"zone,omitempty" json:"zone,omitempty"`
-	RecordName string `toml:"record_name,omitempty" json:"record_name,omitempty"`
-	APIToken   string `toml:"api_token,omitempty" json:"api_token,omitempty"`
-	TTL        int    `toml:"ttl,omitempty" json:"ttl,omitempty"`
-	Resolver   string `toml:"resolver,omitempty" json:"resolver,omitempty"`
+	// DNS-specific fields. The write (admin) side needs Provider plus
+	// credentials; clients read the zone with a plain DNS lookup using just
+	// Zone and RecordName. APIToken authenticates the linode provider; ovh
+	// instead uses AppKey/AppSecret/ConsumerKey and selects a regional API
+	// endpoint via the (S3-shared) Endpoint field, e.g. "ovh-eu".
+	Provider    string `toml:"provider,omitempty" json:"provider,omitempty"`
+	Zone        string `toml:"zone,omitempty" json:"zone,omitempty"`
+	RecordName  string `toml:"record_name,omitempty" json:"record_name,omitempty"`
+	APIToken    string `toml:"api_token,omitempty" json:"api_token,omitempty"`
+	AppKey      string `toml:"app_key,omitempty" json:"app_key,omitempty"`
+	AppSecret   string `toml:"app_secret,omitempty" json:"app_secret,omitempty"`
+	ConsumerKey string `toml:"consumer_key,omitempty" json:"consumer_key,omitempty"`
+	TTL         int    `toml:"ttl,omitempty" json:"ttl,omitempty"`
+	Resolver    string `toml:"resolver,omitempty" json:"resolver,omitempty"`
 }
 
 func (c Config) ReadDrop() DropBackend {

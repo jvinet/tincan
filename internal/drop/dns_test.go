@@ -219,6 +219,50 @@ func TestDNSPutReconcileShrinks(t *testing.T) {
 	}
 }
 
+// flushingProvider is a fakeProvider that also implements dnsprovider.Flusher,
+// counting Flush calls so the drop's commit behavior can be asserted.
+type flushingProvider struct {
+	*fakeProvider
+	flushes int
+}
+
+func (f *flushingProvider) Flush(_ context.Context, _ string) error {
+	f.flushes++
+	return nil
+}
+
+// TestDNSPutFlushesOnChange verifies the drop commits a Flusher provider's
+// staged writes exactly once per Put that changes records, and not at all when
+// a Put is a no-op (so OVH's zone refresh isn't fired needlessly).
+func TestDNSPutFlushesOnChange(t *testing.T) {
+	fp := &flushingProvider{fakeProvider: &fakeProvider{}}
+	d := &DNS{zone: "example.com", name: "_tincan", fqdn: "_tincan.example.com", provider: fp, lookup: fp.lookup}
+	ctx := context.Background()
+
+	if err := d.Put(ctx, []byte("the original directory blob")); err != nil {
+		t.Fatal(err)
+	}
+	if fp.flushes != 1 {
+		t.Fatalf("flushes after creating records = %d, want 1", fp.flushes)
+	}
+
+	// Re-publishing identical bytes changes nothing: nothing to commit.
+	if err := d.Put(ctx, []byte("the original directory blob")); err != nil {
+		t.Fatal(err)
+	}
+	if fp.flushes != 1 {
+		t.Fatalf("flushes after a no-op Put = %d, want 1 (no change ⇒ no refresh)", fp.flushes)
+	}
+
+	// Different bytes update the records, which must commit again.
+	if err := d.Put(ctx, []byte("a wholly different directory blob")); err != nil {
+		t.Fatal(err)
+	}
+	if fp.flushes != 2 {
+		t.Fatalf("flushes after changed Put = %d, want 2", fp.flushes)
+	}
+}
+
 // DNS names are case-insensitive and providers normalize them; NewDNS must
 // lowercase the zone and record name so provider record lookups in Put don't
 // miss a differently-cased stored name (which would duplicate the chunk set).

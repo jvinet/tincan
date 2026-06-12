@@ -64,6 +64,7 @@ func TestLoadValidDropTypes(t *testing.T) {
 		{name: "http", backend: DropBackend{Type: "http", URL: "https://example.com/directory.bin", Username: "bob", Password: "secret"}},
 		{name: "s3", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Region: "us-east-1", Bucket: "tincan-net", AccessKey: "access", SecretKey: "secret"}},
 		{name: "dns", backend: DropBackend{Type: "dns", Provider: "linode", Zone: "example.com", APIToken: "tok"}},
+		{name: "dns-ovh", backend: DropBackend{Type: "dns", Provider: "ovh", Zone: "example.com", Endpoint: "ovh-eu", AppKey: "ak", AppSecret: "as", ConsumerKey: "ck"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -300,6 +301,12 @@ func TestValidateRejectsBadDropFields(t *testing.T) {
 		{name: "dns provider without token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode"}},
 		{name: "dns token without provider", backend: DropBackend{Type: "dns", Zone: "example.com", APIToken: "tok"}},
 		{name: "dns mixed fields", backend: DropBackend{Type: "dns", Zone: "example.com", Bucket: "bucket"}},
+		{name: "dns ovh missing credentials", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "ovh"}},
+		{name: "dns ovh partial credentials", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "ovh", AppKey: "ak"}},
+		{name: "dns ovh with api_token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "ovh", AppKey: "ak", AppSecret: "as", ConsumerKey: "ck", APIToken: "tok"}},
+		{name: "dns token provider with app_key", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode", APIToken: "tok", AppKey: "ak"}},
+		{name: "dns endpoint on non-ovh", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode", APIToken: "tok", Endpoint: "ovh-eu"}},
+		{name: "dns app_key without provider", backend: DropBackend{Type: "dns", Zone: "example.com", AppKey: "ak"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
