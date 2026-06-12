@@ -103,6 +103,17 @@ func (d *DNS) Put(ctx context.Context, data []byte) error {
 	if err != nil {
 		return err
 	}
+	// Providers that model the TXT records at a name as a single atomic set (an
+	// RRset, e.g. deSEC) have no per-record id to reconcile against; they
+	// replace the whole set in one call. Prefer that path when available — the
+	// write is atomic, so unlike the per-record reconciliation below there is no
+	// half-updated window for a reader to observe.
+	if r, ok := d.provider.(dnsprovider.Replacer); ok {
+		if err := r.ReplaceTXT(ctx, d.zone, d.name, desired); err != nil {
+			return mapProviderErr(err)
+		}
+		return nil
+	}
 	existing, err := d.provider.ListTXT(ctx, d.zone, d.name)
 	if err != nil {
 		return mapProviderErr(err)

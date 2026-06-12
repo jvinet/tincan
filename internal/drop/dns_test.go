@@ -263,6 +263,68 @@ func TestDNSPutFlushesOnChange(t *testing.T) {
 	}
 }
 
+// replacingProvider is a fakeProvider that also implements dnsprovider.Replacer,
+// recording each ReplaceTXT call so the drop's preference for the atomic
+// set-replace path (over per-record reconciliation) can be asserted.
+type replacingProvider struct {
+	*fakeProvider
+	replaced [][]string
+}
+
+func (p *replacingProvider) ReplaceTXT(_ context.Context, _, _ string, values []string) error {
+	p.replaced = append(p.replaced, append([]string(nil), values...))
+	// Mirror the set into the embedded records so Get (via lookup) round-trips.
+	p.records = p.records[:0]
+	for _, v := range values {
+		p.nextID++
+		p.records = append(p.records, dnsprovider.TXTRecord{ID: fmt.Sprintf("r%d", p.nextID), Value: v})
+	}
+	return nil
+}
+
+// TestDNSPutPrefersReplacer verifies that when a provider implements Replacer,
+// the drop publishes the whole directory through ReplaceTXT in one atomic call
+// and never touches the per-record mutators.
+func TestDNSPutPrefersReplacer(t *testing.T) {
+	rp := &replacingProvider{fakeProvider: &fakeProvider{}}
+	d := &DNS{zone: "example.com", name: "_tincan", fqdn: "_tincan.example.com", provider: rp, lookup: rp.lookup}
+	ctx := context.Background()
+
+	blob := []byte("a directory blob published atomically through ReplaceTXT")
+	if err := d.Put(ctx, blob); err != nil {
+		t.Fatal(err)
+	}
+	if len(rp.replaced) != 1 {
+		t.Fatalf("ReplaceTXT calls = %d, want 1", len(rp.replaced))
+	}
+	want, _ := chunkBlob(blob)
+	if !equalChunks(rp.replaced[0], want) {
+		t.Fatalf("ReplaceTXT values = %v, want %v", rp.replaced[0], want)
+	}
+	if rp.creates != 0 || rp.updates != 0 || rp.deletes != 0 {
+		t.Fatalf("per-record mutators used (creates=%d updates=%d deletes=%d), want none", rp.creates, rp.updates, rp.deletes)
+	}
+	got, err := d.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, blob) {
+		t.Fatal("round-trip through ReplaceTXT produced the wrong directory")
+	}
+}
+
+func equalChunks(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // DNS names are case-insensitive and providers normalize them; NewDNS must
 // lowercase the zone and record name so provider record lookups in Put don't
 // miss a differently-cased stored name (which would duplicate the chunk set).

@@ -404,7 +404,7 @@ func validateDropBackend(b DropBackend) error {
 			if b.APIToken != "" {
 				return errors.New("api_token is not used by the ovh dns provider; use app_key/app_secret/consumer_key")
 			}
-		default: // token providers (linode, digitalocean, cloudflare)
+		default: // token providers (linode, digitalocean, cloudflare, desec)
 			if !dnsprovider.Supported(b.Provider) {
 				return fmt.Errorf("unsupported dns provider %q", b.Provider)
 			}

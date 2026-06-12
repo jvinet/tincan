@@ -78,7 +78,7 @@ type DropBackend struct {
 	// DNS-specific fields. The write (admin) side needs Provider plus
 	// credentials; clients read the zone with a plain DNS lookup using just
 	// Zone and RecordName. APIToken authenticates the
-	// linode/digitalocean/cloudflare providers; ovh instead uses
+	// linode/digitalocean/cloudflare/desec providers; ovh instead uses
 	// AppKey/AppSecret/ConsumerKey and selects a regional API endpoint via the
 	// (S3-shared) Endpoint field, e.g. "ovh-eu".
 	Provider    string `toml:"provider,omitempty" json:"provider,omitempty"`

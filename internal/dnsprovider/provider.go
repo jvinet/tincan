@@ -52,8 +52,23 @@ type Flusher interface {
 	Flush(ctx context.Context, zone string) error
 }
 
+// Replacer is implemented by providers that model the TXT records at a name as
+// a single resource record set (RRset) — one object holding every value, with
+// no individually-addressable records — rather than as separate records. deSEC
+// is the example. Such an API has no per-record id to reconcile against, but
+// can replace the whole set in one atomic, create-or-update call. When a
+// provider implements Replacer, the dns drop calls ReplaceTXT once with the
+// full desired set instead of reconciling via ListTXT/Create/Update/Delete;
+// because the write is atomic there is no half-updated window for a reader to
+// observe. values are the exact TXT strings to publish (tincan's chunked
+// directory); the provider applies any presentation-format quoting its API
+// requires.
+type Replacer interface {
+	ReplaceTXT(ctx context.Context, zone, name string, values []string) error
+}
+
 // Config selects and configures a provider. Token authenticates the
-// single-token providers (Linode, DigitalOcean, Cloudflare). OVH instead
+// single-token providers (Linode, DigitalOcean, Cloudflare, deSEC). OVH instead
 // authenticates with AppKey/AppSecret/ConsumerKey and selects a regional API
 // endpoint by name (Endpoint, e.g. "ovh-eu"). BaseURL and HTTPClient are
 // optional overrides used by tests.
@@ -82,6 +97,8 @@ func New(cfg Config) (Provider, error) {
 		return newDigitalOcean(cfg), nil
 	case "cloudflare":
 		return newCloudflare(cfg), nil
+	case "desec":
+		return newDeSEC(cfg), nil
 	case "ovh":
 		o, err := newOVH(cfg)
 		if err != nil {
@@ -97,7 +114,7 @@ func New(cfg Config) (Provider, error) {
 // validation to reject typos early.
 func Supported(name string) bool {
 	switch name {
-	case "linode", "digitalocean", "cloudflare", "ovh":
+	case "linode", "digitalocean", "cloudflare", "desec", "ovh":
 		return true
 	default:
 		return false
