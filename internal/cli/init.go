@@ -12,11 +12,12 @@ import (
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
 	"github.com/jvinet/tincan/internal/keys"
+	"github.com/jvinet/tincan/internal/nostr"
 )
 
 type InitCmd struct {
 	Name       string `required:"" help:"Node name."`
-	DropType   string `required:"" enum:"s3,http,file,dns" help:"Dead-drop backend type."`
+	DropType   string `required:"" enum:"s3,http,file,dns,nostr" help:"Dead-drop backend type."`
 	CIDR       string `default:"10.42.0.0/24" help:"Tunnel network CIDR."`
 	Endpoint   string `help:"Published endpoint for this node, as host:port."`
 	Relay      bool   `help:"Mark this admin node as a relay: peers route through it when a direct path is unavailable (requires --endpoint)."`
@@ -45,6 +46,17 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 	publisherPub, publisherPriv, err := keys.GenerateEd25519Keypair()
 	if err != nil {
 		return err
+	}
+	// The nostr drop signs its relay events with a secp256k1 key, separate from
+	// the ed25519 publisher key. Generate it here so the admin never hand-crafts
+	// an nsec; it is filled into the drop config below and replaces the example
+	// keys the skeleton carries.
+	var nostrNsec, nostrNpub string
+	if c.DropType == "nostr" {
+		nostrNsec, nostrNpub, err = nostr.GenerateKey()
+		if err != nil {
+			return err
+		}
 	}
 	tunnelIP, err := directory.NextFreeIP(c.CIDR, nil)
 	if err != nil {
@@ -83,6 +95,13 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 			PublisherKey:    publisherPriv,
 		},
 		Drop: config.SkeletonDrop(c.DropType),
+	}
+	if c.DropType == "nostr" {
+		// Replace the skeleton's example keys with the freshly generated pair.
+		// The nsec stays admin-only; clients pin the npub to verify the slot.
+		cfg.Drop.Admin.Author = nostrNpub
+		cfg.Drop.Admin.Nsec = nostrNsec
+		cfg.Drop.Client.Author = nostrNpub
 	}
 	if stateDir != config.DefaultStateDir {
 		cfg.Sync.StateDir = stateDir
@@ -159,7 +178,18 @@ func (c *InitCmd) Run(_ context.Context, g *Globals) error {
 		secret("private key", publisherPriv),
 	)
 	p.blank()
-	p.hint("Next steps: edit the [drop.admin] and [drop.client] sections, then run `tincan publish`")
+	if c.DropType == "nostr" {
+		p.section("Nostr drop keypair")
+		p.pairs(
+			kv("public key (npub)", nostrNpub),
+			secret("secret key (nsec)", nostrNsec),
+		)
+		p.blank()
+		p.hint("Edit [drop.admin].relays / [drop.client].relays to your preferred relays, then run `tincan publish`")
+		p.hint("The nsec only authorizes writing the relay slot; the directory is independently signed, so a leaked nsec cannot forge it")
+	} else {
+		p.hint("Next steps: edit the [drop.admin] and [drop.client] sections, then run `tincan publish`")
+	}
 	p.hint("This admin observes NAT'd peer endpoints by default; set [observe].enabled = false to turn it off")
 	return nil
 }

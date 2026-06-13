@@ -37,7 +37,8 @@ one; set `[sync] max_directory_age` to also warn when the directory's
 - Linux client/admin support
 - Dead-drop backends: S3-compatible object storage, HTTP (read-only for
   clients), DNS TXT records (Linode, DigitalOcean, Cloudflare, deSEC, Hetzner,
-  Route 53, or OVH), and local filesystem (e.g. shared NFS/SMB mount)
+  Route 53, or OVH), Nostr relays, and local filesystem (e.g. shared NFS/SMB
+  mount)
 - Signed (Ed25519) and age-encrypted directory blobs
 - Full-mesh WireGuard peer configuration via `wgctrl`/netlink (no `wg-quick`)
 - Explicit `up` / `down` / `sync` lifecycle, plus a daemon mode that reconciles
@@ -753,6 +754,52 @@ propagation a client that reads a half-updated set fails to reassemble or verify
 it, keeps its cached directory, and picks up the change on the next sync — so a
 short `ttl` is worthwhile. A directory needing more than ~100 records (≈16 KB, a
 large network) is rejected; use S3 or HTTP for that.
+
+### Nostr relays
+
+The directory can live as a [Nostr](https://nostr.com) event on one or more
+relays. Clients read it with **just the admin's public key and a relay list — no
+account and no credentials** — the same low-friction read story as the DNS
+backend, with the added benefit that publishing to several independent relays
+makes the drop decentralized and hard to censor.
+
+`tincan init --drop-type nostr` generates the Nostr keypair for you and fills it
+in; you normally only edit the relay list.
+
+```toml
+[drop.admin]
+type = "nostr"
+relays = ["wss://relay.damus.io", "wss://nos.lol"]   # publish to all of these
+author = "npub1..."        # the admin's Nostr public key (npub or 64-char hex)
+nsec = "nsec1..."          # the admin's secret key (nsec or hex) — admin only
+# identifier = "_tincan"   # NIP-33 d-tag naming the slot (default "_tincan")
+
+[drop.client]
+type = "nostr"
+relays = ["wss://relay.damus.io", "wss://nos.lol"]
+author = "npub1..."        # same public key; clients pin it to verify the slot
+# identifier = "_tincan"
+```
+
+Clients never set `nsec` — they only read events from `author` and verify them.
+A `[drop.admin]` without an `nsec` is read-only (like `http`), so the admin needs
+the secret key to `publish`.
+
+How it works: the sealed directory is published as a NIP-78 replaceable event
+(kind 30078) tagged with the `identifier`; relays keep only the latest event per
+key, so it acts as a single mutable slot. Reads query every relay, verify each
+event's author, kind, tag, id, and signature, and take the newest valid one — so
+an untrusted or hostile relay cannot substitute a forged or stale directory.
+A write succeeds as long as one relay accepts the event.
+
+The Nostr key only controls **who may write the relay slot**. The directory blob
+is independently age-encrypted and Ed25519-signed by the publisher key, and
+rollback is caught by its monotonic serial — so even a leaked `nsec` cannot forge
+a directory, only withhold or replay one (mitigated by listing several relays and
+republishing on a cadence; see `max_directory_age`). Most relays cap event size
+near 64 KB — ample for a directory, but smaller than the `s3`/`http` ceiling — so
+very large networks should pick relays with generous limits. See
+[spec/nostr.md](spec/nostr.md) for the full design.
 
 ## Configuration reference
 

@@ -67,6 +67,7 @@ func TestLoadValidDropTypes(t *testing.T) {
 		{name: "dns-ovh", backend: DropBackend{Type: "dns", Provider: "ovh", Zone: "example.com", Endpoint: "ovh-eu", AppKey: "ak", AppSecret: "as", ConsumerKey: "ck"}},
 		{name: "dns-route53", backend: DropBackend{Type: "dns", Provider: "route53", Zone: "example.com", AccessKey: "AKIA", SecretKey: "secret"}},
 		{name: "dns-hetzner", backend: DropBackend{Type: "dns", Provider: "hetzner", Zone: "example.com", APIToken: "tok"}},
+		{name: "nostr", backend: DropBackend{Type: "nostr", Relays: []string{"wss://relay.damus.io", "wss://nos.lol"}, Author: "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,6 +95,9 @@ func TestLoadValidDropTypes(t *testing.T) {
 					t.Fatalf("dns ttl default = %d", loaded.Drop.Client.TTL)
 				}
 			}
+			if tc.backend.Type == "nostr" && loaded.Drop.Client.Identifier != "_tincan" {
+				t.Fatalf("nostr identifier default = %q", loaded.Drop.Client.Identifier)
+			}
 		})
 	}
 }
@@ -114,6 +118,31 @@ func TestDNSClientOmitsTTL(t *testing.T) {
 	}
 	if loaded.Drop.Client.TTL != 0 {
 		t.Fatalf("client ttl = %d, want 0 (suppressed on the read side)", loaded.Drop.Client.TTL)
+	}
+}
+
+func TestNostrSkeletonRoundTrip(t *testing.T) {
+	cfg := validConfig(t)
+	cfg.Drop = SkeletonDrop("nostr")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Drop.Admin.Nsec == "" {
+		t.Error("admin should carry the signing nsec")
+	}
+	if loaded.Drop.Client.Nsec != "" {
+		t.Error("client must never carry the nsec")
+	}
+	if loaded.Drop.Admin.Author == "" || loaded.Drop.Client.Author == "" {
+		t.Error("both sides need the author public key")
+	}
+	if len(loaded.Drop.Client.Relays) == 0 {
+		t.Error("client should carry the relay list")
 	}
 }
 
@@ -316,6 +345,13 @@ func TestValidateRejectsBadDropFields(t *testing.T) {
 		{name: "dns token provider with app_key", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode", APIToken: "tok", AppKey: "ak"}},
 		{name: "dns endpoint on non-ovh", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode", APIToken: "tok", Endpoint: "ovh-eu"}},
 		{name: "dns app_key without provider", backend: DropBackend{Type: "dns", Zone: "example.com", AppKey: "ak"}},
+		{name: "nostr missing relays", backend: DropBackend{Type: "nostr", Author: "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"}},
+		{name: "nostr missing author", backend: DropBackend{Type: "nostr", Relays: []string{"wss://relay.damus.io"}}},
+		{name: "nostr bad relay scheme", backend: DropBackend{Type: "nostr", Relays: []string{"http://relay.damus.io"}, Author: "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"}},
+		{name: "nostr bad author", backend: DropBackend{Type: "nostr", Relays: []string{"wss://relay.damus.io"}, Author: "not-a-key"}},
+		{name: "nostr nsec mismatch", backend: DropBackend{Type: "nostr", Relays: []string{"wss://relay.damus.io"}, Author: "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e", Nsec: "1111111111111111111111111111111111111111111111111111111111111111"}},
+		{name: "nostr mixed fields", backend: DropBackend{Type: "nostr", Relays: []string{"wss://relay.damus.io"}, Author: "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e", Bucket: "bucket"}},
+		{name: "nostr fields on s3 drop", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Bucket: "bucket", Relays: []string{"wss://relay.damus.io"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

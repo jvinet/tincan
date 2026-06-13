@@ -91,6 +91,18 @@ type DropBackend struct {
 	ConsumerKey string `toml:"consumer_key,omitempty" json:"consumer_key,omitempty"`
 	TTL         int    `toml:"ttl,omitempty" json:"ttl,omitempty"`
 	Resolver    string `toml:"resolver,omitempty" json:"resolver,omitempty"`
+
+	// Nostr-specific fields. Clients read with just Relays + Author (and the
+	// optional Identifier); they hold no secret. The admin (write) side also sets
+	// Nsec to sign and publish the directory event. Author is the admin's Nostr
+	// public key (npub1… or 64-char hex); Nsec is the matching secret key (nsec1…
+	// or hex). Identifier is the NIP-33 d-tag naming the slot (default "_tincan"),
+	// letting one key host multiple networks. The event kind (NIP-78, 30078) is
+	// fixed internally, like the dns drop's "tc1" record prefix.
+	Relays     []string `toml:"relays,omitempty" json:"relays,omitempty"`
+	Author     string   `toml:"author,omitempty" json:"author,omitempty"`
+	Nsec       string   `toml:"nsec,omitempty" json:"nsec,omitempty"`
+	Identifier string   `toml:"identifier,omitempty" json:"identifier,omitempty"`
 }
 
 func (c Config) ReadDrop() DropBackend {

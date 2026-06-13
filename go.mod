@@ -1,10 +1,12 @@
 module github.com/jvinet/tincan
 
-go 1.24.0
+go 1.25
 
 require (
 	filippo.io/age v1.3.1
 	github.com/alecthomas/kong v1.15.0
+	github.com/btcsuite/btcd/btcec/v2 v2.5.0
+	github.com/coder/websocket v1.8.14
 	github.com/google/renameio/v2 v2.0.0
 	github.com/minio/minio-go/v7 v7.0.95
 	github.com/pelletier/go-toml/v2 v2.3.1
@@ -18,6 +20,9 @@ require (
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
+	github.com/btcsuite/btcd/chainhash/v2 v2.0.0 // indirect
+	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect

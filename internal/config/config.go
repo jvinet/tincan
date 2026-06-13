@@ -14,6 +14,7 @@ import (
 	"github.com/google/renameio/v2"
 	"github.com/jvinet/tincan/internal/dnsprovider"
 	"github.com/jvinet/tincan/internal/keys"
+	"github.com/jvinet/tincan/internal/nostr"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -192,6 +193,11 @@ func applyBackendDefaults(b *DropBackend) {
 			b.TTL = 300
 		}
 	}
+	if b.Type == "nostr" && b.Identifier == "" {
+		// The d-tag must match between admin and client, so default it on both
+		// sides (unlike the dns TTL, which is write-side only).
+		b.Identifier = "_tincan"
+	}
 }
 
 func (c Config) Validate(allowIncomplete bool) error {
@@ -348,6 +354,13 @@ func RequireAdmin(c Config) error {
 }
 
 func validateDropBackend(b DropBackend) error {
+	// The nostr fields are not covered by the per-type rejectBackendFields calls
+	// below (that helper is string-only, and relays is a slice), so reject them
+	// up front on every other type. A misplaced relay list or author is then an
+	// error rather than silently ignored.
+	if b.Type != "nostr" && (len(b.Relays) > 0 || b.Author != "" || b.Nsec != "" || b.Identifier != "") {
+		return fmt.Errorf("relays/author/nsec/identifier are only valid for nostr drops, not %q", b.Type)
+	}
 	switch b.Type {
 	case "file":
 		if b.Path == "" {
@@ -438,6 +451,34 @@ func validateDropBackend(b DropBackend) error {
 			}
 		}
 		return rejectBackendFields("provider/zone/record_name/api_token/app_key/app_secret/consumer_key/access_key/secret_key/endpoint/ttl/resolver", b.Region, b.Bucket, b.ObjectKey, b.URL, b.Username, b.Password, b.Path)
+	case "nostr":
+		if len(b.Relays) == 0 {
+			return errors.New("relays is required for nostr drops")
+		}
+		for _, r := range b.Relays {
+			if _, err := nostr.NormalizeRelayURL(r); err != nil {
+				return err
+			}
+		}
+		if b.Author == "" {
+			return errors.New("author is required for nostr drops")
+		}
+		authorHex, err := nostr.ParsePublicKey(b.Author)
+		if err != nil {
+			return fmt.Errorf("invalid nostr author: %w", err)
+		}
+		// The write (admin) side carries the secret key; the read side must not.
+		// When present it has to match the author, like the wireguard key pair.
+		if b.Nsec != "" {
+			sk, err := nostr.ParseSecretKey(b.Nsec)
+			if err != nil {
+				return fmt.Errorf("invalid nostr nsec: %w", err)
+			}
+			if nostr.PublicKeyHex(sk) != authorHex {
+				return errors.New("nostr nsec does not match author public key")
+			}
+		}
+		return rejectBackendFields("relays/author/nsec/identifier", b.Endpoint, b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password, b.Path, b.Provider, b.Zone, b.RecordName, b.APIToken, b.AppKey, b.AppSecret, b.ConsumerKey, b.Resolver)
 	default:
 		return fmt.Errorf("unsupported type %q", b.Type)
 	}
@@ -477,6 +518,15 @@ func SkeletonDrop(dropType string) DropConfig {
 	case "dns":
 		admin := DropBackend{Type: "dns", Provider: "linode", Zone: "example.com", RecordName: "_tincan", APIToken: "YOUR-LINODE-API-TOKEN", TTL: 300}
 		client := DropBackend{Type: "dns", Zone: "example.com", RecordName: "_tincan"}
+		return DropConfig{Admin: admin, Client: client}
+	case "nostr":
+		// Example keys (the canonical NIP-19 sample keypair, valid but public);
+		// `tincan init` overwrites author/nsec with a freshly generated keypair.
+		relays := []string{"wss://relay.damus.io", "wss://nos.lol"}
+		npub := "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+		nsec := "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"
+		admin := DropBackend{Type: "nostr", Relays: relays, Author: npub, Nsec: nsec, Identifier: "_tincan"}
+		client := DropBackend{Type: "nostr", Relays: relays, Author: npub, Identifier: "_tincan"}
 		return DropConfig{Admin: admin, Client: client}
 	default:
 		b := DropBackend{Type: dropType}
