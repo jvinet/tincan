@@ -66,6 +66,7 @@ func TestLoadValidDropTypes(t *testing.T) {
 		{name: "dns", backend: DropBackend{Type: "dns", Provider: "linode", Zone: "example.com", APIToken: "tok"}},
 		{name: "dns-ovh", backend: DropBackend{Type: "dns", Provider: "ovh", Zone: "example.com", Endpoint: "ovh-eu", AppKey: "ak", AppSecret: "as", ConsumerKey: "ck"}},
 		{name: "dns-route53", backend: DropBackend{Type: "dns", Provider: "route53", Zone: "example.com", AccessKey: "AKIA", SecretKey: "secret"}},
+		{name: "dns-hetzner", backend: DropBackend{Type: "dns", Provider: "hetzner", Zone: "example.com", APIToken: "tok"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -303,6 +304,8 @@ func TestValidateRejectsBadDropFields(t *testing.T) {
 		{name: "dns route53 partial credentials", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "route53", AccessKey: "ak"}},
 		{name: "dns route53 with api_token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "route53", AccessKey: "ak", SecretKey: "sk", APIToken: "tok"}},
 		{name: "dns token provider with access_key", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode", APIToken: "tok", AccessKey: "ak"}},
+		{name: "dns hetzner without token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "hetzner"}},
+		{name: "dns hetzner with access_key", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "hetzner", APIToken: "tok", AccessKey: "ak"}},
 		{name: "dns access_key without provider", backend: DropBackend{Type: "dns", Zone: "example.com", AccessKey: "ak", SecretKey: "sk"}},
 		{name: "dns provider without token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode"}},
 		{name: "dns token without provider", backend: DropBackend{Type: "dns", Zone: "example.com", APIToken: "tok"}},

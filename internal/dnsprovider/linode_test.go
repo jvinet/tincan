@@ -156,7 +156,7 @@ func TestNewUnsupportedProvider(t *testing.T) {
 	if Supported("gandi") {
 		t.Fatal("Supported() should reject an unknown provider")
 	}
-	for _, name := range []string{"linode", "digitalocean", "cloudflare", "desec", "route53", "ovh"} {
+	for _, name := range []string{"linode", "digitalocean", "cloudflare", "desec", "hetzner", "route53", "ovh"} {
 		if !Supported(name) {
 			t.Fatalf("Supported(%q) = false, want true", name)
 		}

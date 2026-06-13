@@ -420,7 +420,7 @@ func validateDropBackend(b DropBackend) error {
 			if b.Endpoint != "" {
 				return errors.New("endpoint is only used by the ovh dns provider, not route53")
 			}
-		default: // token providers (linode, digitalocean, cloudflare, desec)
+		default: // token providers (linode, digitalocean, cloudflare, desec, hetzner)
 			if !dnsprovider.Supported(b.Provider) {
 				return fmt.Errorf("unsupported dns provider %q", b.Provider)
 			}
