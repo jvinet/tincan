@@ -70,8 +70,9 @@ type Replacer interface {
 // Config selects and configures a provider. Token authenticates the
 // single-token providers (Linode, DigitalOcean, Cloudflare, deSEC). OVH instead
 // authenticates with AppKey/AppSecret/ConsumerKey and selects a regional API
-// endpoint by name (Endpoint, e.g. "ovh-eu"). BaseURL and HTTPClient are
-// optional overrides used by tests.
+// endpoint by name (Endpoint, e.g. "ovh-eu"). Route 53 authenticates with
+// AccessKey/SecretKey (AWS credentials), signing each request with SigV4.
+// BaseURL and HTTPClient are optional overrides used by tests.
 type Config struct {
 	Name  string
 	Token string
@@ -83,6 +84,11 @@ type Config struct {
 	AppSecret   string
 	ConsumerKey string
 	Endpoint    string
+
+	// AWS access key id and secret access key, used by route53. Unused by the
+	// other providers.
+	AccessKey string
+	SecretKey string
 
 	BaseURL    string
 	HTTPClient *http.Client
@@ -99,6 +105,8 @@ func New(cfg Config) (Provider, error) {
 		return newCloudflare(cfg), nil
 	case "desec":
 		return newDeSEC(cfg), nil
+	case "route53":
+		return newRoute53(cfg), nil
 	case "ovh":
 		o, err := newOVH(cfg)
 		if err != nil {
@@ -114,7 +122,7 @@ func New(cfg Config) (Provider, error) {
 // validation to reject typos early.
 func Supported(name string) bool {
 	switch name {
-	case "linode", "digitalocean", "cloudflare", "desec", "ovh":
+	case "linode", "digitalocean", "cloudflare", "desec", "route53", "ovh":
 		return true
 	default:
 		return false

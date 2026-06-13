@@ -65,6 +65,7 @@ func TestLoadValidDropTypes(t *testing.T) {
 		{name: "s3", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Region: "us-east-1", Bucket: "tincan-net", AccessKey: "access", SecretKey: "secret"}},
 		{name: "dns", backend: DropBackend{Type: "dns", Provider: "linode", Zone: "example.com", APIToken: "tok"}},
 		{name: "dns-ovh", backend: DropBackend{Type: "dns", Provider: "ovh", Zone: "example.com", Endpoint: "ovh-eu", AppKey: "ak", AppSecret: "as", ConsumerKey: "ck"}},
+		{name: "dns-route53", backend: DropBackend{Type: "dns", Provider: "route53", Zone: "example.com", AccessKey: "AKIA", SecretKey: "secret"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -297,7 +298,12 @@ func TestValidateRejectsBadDropFields(t *testing.T) {
 		{name: "s3 missing bucket", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com"}},
 		{name: "s3 partial credentials", backend: DropBackend{Type: "s3", Endpoint: "s3.amazonaws.com", Bucket: "bucket", AccessKey: "access"}},
 		{name: "dns missing zone", backend: DropBackend{Type: "dns", Provider: "linode", APIToken: "tok"}},
-		{name: "dns unsupported provider", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "route53", APIToken: "tok"}},
+		{name: "dns unsupported provider", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "gandi", APIToken: "tok"}},
+		{name: "dns route53 missing credentials", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "route53"}},
+		{name: "dns route53 partial credentials", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "route53", AccessKey: "ak"}},
+		{name: "dns route53 with api_token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "route53", AccessKey: "ak", SecretKey: "sk", APIToken: "tok"}},
+		{name: "dns token provider with access_key", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode", APIToken: "tok", AccessKey: "ak"}},
+		{name: "dns access_key without provider", backend: DropBackend{Type: "dns", Zone: "example.com", AccessKey: "ak", SecretKey: "sk"}},
 		{name: "dns provider without token", backend: DropBackend{Type: "dns", Zone: "example.com", Provider: "linode"}},
 		{name: "dns token without provider", backend: DropBackend{Type: "dns", Zone: "example.com", APIToken: "tok"}},
 		{name: "dns mixed fields", backend: DropBackend{Type: "dns", Zone: "example.com", Bucket: "bucket"}},

@@ -36,8 +36,8 @@ one; set `[sync] max_directory_age` to also warn when the directory's
 - Single Go binary: `tincan`
 - Linux client/admin support
 - Dead-drop backends: S3-compatible object storage, HTTP (read-only for
-  clients), DNS TXT records (Linode, DigitalOcean, Cloudflare, deSEC, or OVH), and local
-  filesystem (e.g. shared NFS/SMB mount)
+  clients), DNS TXT records (Linode, DigitalOcean, Cloudflare, deSEC, Route 53,
+  or OVH), and local filesystem (e.g. shared NFS/SMB mount)
 - Signed (Ed25519) and age-encrypted directory blobs
 - Full-mesh WireGuard peer configuration via `wgctrl`/netlink (no `wg-quick`)
 - Explicit `up` / `down` / `sync` lifecycle, plus a daemon mode that reconciles
@@ -678,7 +678,7 @@ the admin needs provider credentials, used to write the records.
 ```toml
 [drop.admin]
 type = "dns"
-provider = "digitalocean"     # or "linode", "cloudflare", "desec"
+provider = "digitalocean"     # or "linode", "cloudflare", "desec", "route53"
 zone = "example.com"          # a DNS zone hosted at the provider
 record_name = "_tincan"       # host label the TXT records live at (default "_tincan")
 api_token = "..."             # provider API token with DNS write access
@@ -720,6 +720,26 @@ Supported providers and how they authenticate:
 
   Create the keys at OVH's token page (e.g. `https://eu.api.ovh.com/createToken/`)
   and grant the consumer key `GET`/`POST`/`PUT`/`DELETE` on `/domain/zone/*`.
+  The `[drop.client]` side is identical to the example above (no credentials).
+- **`route53`** — Amazon Route 53 signs each request with AWS Signature Version 4
+  using an access key id and secret access key (the same `access_key`/`secret_key`
+  fields as the S3 backend) rather than a bearer token:
+
+  ```toml
+  [drop.admin]
+  type = "dns"
+  provider = "route53"
+  zone = "example.com"
+  record_name = "_tincan"
+  access_key = "AKIA..."
+  secret_key = "..."
+  # ttl = 300
+  ```
+
+  The IAM credentials need permission to look up the zone and change its records:
+  `route53:ListHostedZonesByName`, `route53:ListResourceRecordSets`, and
+  `route53:ChangeResourceRecordSets` on the hosted zone. Route 53 is a global
+  service, so tincan always talks to the standard endpoint (no region setting).
   The `[drop.client]` side is identical to the example above (no credentials).
 
 The zone must already be hosted at the provider — tincan writes records into it

@@ -391,7 +391,7 @@ func validateDropBackend(b DropBackend) error {
 		switch b.Provider {
 		case "":
 			// Read-only client side: no write credentials of any kind.
-			if b.APIToken != "" || b.AppKey != "" || b.AppSecret != "" || b.ConsumerKey != "" {
+			if b.APIToken != "" || b.AppKey != "" || b.AppSecret != "" || b.ConsumerKey != "" || b.AccessKey != "" || b.SecretKey != "" {
 				return errors.New("dns write credentials are set but no provider is configured")
 			}
 			if b.Endpoint != "" {
@@ -404,6 +404,22 @@ func validateDropBackend(b DropBackend) error {
 			if b.APIToken != "" {
 				return errors.New("api_token is not used by the ovh dns provider; use app_key/app_secret/consumer_key")
 			}
+			if b.AccessKey != "" || b.SecretKey != "" {
+				return errors.New("access_key/secret_key are not used by the ovh dns provider; use app_key/app_secret/consumer_key")
+			}
+		case "route53":
+			if b.AccessKey == "" || b.SecretKey == "" {
+				return errors.New("route53 dns provider requires access_key and secret_key")
+			}
+			if b.APIToken != "" {
+				return errors.New("api_token is not used by the route53 dns provider; use access_key/secret_key")
+			}
+			if b.AppKey != "" || b.AppSecret != "" || b.ConsumerKey != "" {
+				return errors.New("app_key/app_secret/consumer_key are only used by the ovh dns provider, not route53")
+			}
+			if b.Endpoint != "" {
+				return errors.New("endpoint is only used by the ovh dns provider, not route53")
+			}
 		default: // token providers (linode, digitalocean, cloudflare, desec)
 			if !dnsprovider.Supported(b.Provider) {
 				return fmt.Errorf("unsupported dns provider %q", b.Provider)
@@ -414,11 +430,14 @@ func validateDropBackend(b DropBackend) error {
 			if b.AppKey != "" || b.AppSecret != "" || b.ConsumerKey != "" {
 				return fmt.Errorf("app_key/app_secret/consumer_key are only used by the ovh dns provider, not %q", b.Provider)
 			}
+			if b.AccessKey != "" || b.SecretKey != "" {
+				return fmt.Errorf("access_key/secret_key are only used by the route53 dns provider, not %q", b.Provider)
+			}
 			if b.Endpoint != "" {
 				return fmt.Errorf("endpoint is only used by the ovh dns provider, not %q", b.Provider)
 			}
 		}
-		return rejectBackendFields("provider/zone/record_name/api_token/app_key/app_secret/consumer_key/endpoint/ttl/resolver", b.Region, b.Bucket, b.ObjectKey, b.AccessKey, b.SecretKey, b.URL, b.Username, b.Password, b.Path)
+		return rejectBackendFields("provider/zone/record_name/api_token/app_key/app_secret/consumer_key/access_key/secret_key/endpoint/ttl/resolver", b.Region, b.Bucket, b.ObjectKey, b.URL, b.Username, b.Password, b.Path)
 	default:
 		return fmt.Errorf("unsupported type %q", b.Type)
 	}

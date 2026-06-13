@@ -75,6 +75,8 @@ func NewDNS(cfg config.DropBackend) (*DNS, error) {
 			AppSecret:   cfg.AppSecret,
 			ConsumerKey: cfg.ConsumerKey,
 			Endpoint:    cfg.Endpoint,
+			AccessKey:   cfg.AccessKey,
+			SecretKey:   cfg.SecretKey,
 			TTL:         cfg.TTL,
 		})
 		if err != nil {

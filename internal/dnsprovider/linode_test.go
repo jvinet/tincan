@@ -150,10 +150,15 @@ func TestLinodeDomainNotFound(t *testing.T) {
 }
 
 func TestNewUnsupportedProvider(t *testing.T) {
-	if _, err := New(Config{Name: "route53"}); err == nil {
+	if _, err := New(Config{Name: "gandi"}); err == nil {
 		t.Fatal("expected error for unsupported provider")
 	}
-	if Supported("route53") || !Supported("linode") || !Supported("digitalocean") || !Supported("ovh") {
-		t.Fatal("Supported() returned wrong result")
+	if Supported("gandi") {
+		t.Fatal("Supported() should reject an unknown provider")
+	}
+	for _, name := range []string{"linode", "digitalocean", "cloudflare", "desec", "route53", "ovh"} {
+		if !Supported(name) {
+			t.Fatalf("Supported(%q) = false, want true", name)
+		}
 	}
 }

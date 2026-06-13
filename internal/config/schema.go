@@ -80,7 +80,8 @@ type DropBackend struct {
 	// Zone and RecordName. APIToken authenticates the
 	// linode/digitalocean/cloudflare/desec providers; ovh instead uses
 	// AppKey/AppSecret/ConsumerKey and selects a regional API endpoint via the
-	// (S3-shared) Endpoint field, e.g. "ovh-eu".
+	// (S3-shared) Endpoint field, e.g. "ovh-eu"; route53 uses the (S3-shared)
+	// AccessKey/SecretKey AWS credentials.
 	Provider    string `toml:"provider,omitempty" json:"provider,omitempty"`
 	Zone        string `toml:"zone,omitempty" json:"zone,omitempty"`
 	RecordName  string `toml:"record_name,omitempty" json:"record_name,omitempty"`
