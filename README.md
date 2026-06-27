@@ -1,5 +1,7 @@
 # Tincan
 
+![title](doc/tincan.png)
+
 Tincan is a small mesh-VPN orchestration tool for WireGuard. It keeps an
 encrypted, signed directory of node public keys, tunnel IPs, and endpoints in a
 **dead-drop** backend, then syncs that directory onto Linux WireGuard
