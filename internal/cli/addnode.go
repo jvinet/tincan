@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
-	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
 	"github.com/jvinet/tincan/internal/keys"
@@ -156,17 +155,9 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	}
 
 	dir.Nodes = append(dir.Nodes, directory.Node{Name: c.Name, PublicKey: publicKey, TunnelIP: tunnelIP, AgeRecipient: ageRecipient, Endpoint: c.Endpoint, Relay: c.Relay})
-	if c.NoPublish {
-		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
-			return err
-		}
-	} else {
-		if err := bumpDirectory(&dir); err != nil {
-			return err
-		}
-		if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
-			return err
-		}
+	dir, err = saveAdminDirectory(ctx, cfg, d, dir, c.NoPublish)
+	if err != nil {
+		return err
 	}
 	if c.Bootstrap != "" {
 		node := bootstrap.Node{

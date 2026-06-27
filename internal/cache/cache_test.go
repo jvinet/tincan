@@ -108,6 +108,19 @@ func TestWriteRefusesLowerSerial(t *testing.T) {
 	}
 }
 
+func TestWriteRejectsUnreadableSerial(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.WriteFile(config.SerialPath(stateDir), []byte("not-a-number\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(stateDir, sampleDir(t), ""); err == nil {
+		t.Fatal("expected corrupt serial file to block cache write")
+	}
+	if err := WriteSerialFloor(stateDir, 99); err == nil {
+		t.Fatal("expected corrupt serial file to block serial floor write")
+	}
+}
+
 func TestWriteSerialFloor(t *testing.T) {
 	stateDir := t.TempDir()
 	if err := WriteSerialFloor(stateDir, 0); err != nil {

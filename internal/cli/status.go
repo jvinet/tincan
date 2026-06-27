@@ -73,7 +73,10 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		WireGuard: map[string]interface{}{},
 	}
 	nodesByPubkey := map[string]directory.Node{}
+	var cachedDir directory.Directory
+	var self directory.Node
 	if dir, _, err := cache.Read(cfg.Sync.StateDir); err == nil {
+		cachedDir = dir
 		out.Cache["serial"] = dir.Serial
 		out.Cache["path"] = config.CachePath(cfg.Sync.StateDir)
 		out.Cache["created_at"] = dir.CreatedAt
@@ -83,7 +86,8 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		for _, node := range dir.Nodes {
 			nodesByPubkey[node.PublicKey] = node
 		}
-		if self, err := findSelf(cfg, dir); err == nil {
+		if found, err := findSelf(cfg, dir); err == nil {
+			self = found
 			out.TunnelIP = self.TunnelIP
 			if self.Endpoint == "" {
 				anyPeerReachable := false
@@ -136,10 +140,8 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 		out.Drop["reachable"] = false
 		out.Drop["error"] = err.Error()
 	}
-	dir, _, _ := cache.Read(cfg.Sync.StateDir)
-	self, _ := findSelf(cfg, dir)
-	if dir.Domain != "" {
-		out.DNS = dnsStatusFields(cfg, dir, self)
+	if cachedDir.Domain != "" {
+		out.DNS = dnsStatusFields(cfg, cachedDir, self)
 	}
 	if client, err := wgctrl.New(); err == nil {
 		dev, devErr := client.Device(cfg.Wireguard.Interface)
@@ -148,7 +150,7 @@ func (c *StatusCmd) Run(ctx context.Context, g *Globals) error {
 			out.WireGuard["public_key"] = dev.PublicKey.String()
 			out.WireGuard["listen_port"] = dev.ListenPort
 			out.WireGuard["peer_count"] = len(dev.Peers)
-			out.WireGuard["peers"] = wireGuardPeerStatus(dev.Peers, dir, self)
+			out.WireGuard["peers"] = wireGuardPeerStatus(dev.Peers, cachedDir, self)
 			out.WireGuard["type"] = dev.Type.String()
 		} else if !errors.Is(devErr, os.ErrNotExist) {
 			// A missing interface already reads as "network: down"; only

@@ -95,41 +95,46 @@ type Config struct {
 	HTTPClient *http.Client
 }
 
+type constructor func(Config) (Provider, error)
+
+var constructors = map[string]constructor{
+	"linode": func(cfg Config) (Provider, error) {
+		return newLinode(cfg), nil
+	},
+	"digitalocean": func(cfg Config) (Provider, error) {
+		return newDigitalOcean(cfg), nil
+	},
+	"cloudflare": func(cfg Config) (Provider, error) {
+		return newCloudflare(cfg), nil
+	},
+	"desec": func(cfg Config) (Provider, error) {
+		return newDeSEC(cfg), nil
+	},
+	"hetzner": func(cfg Config) (Provider, error) {
+		return newHetzner(cfg), nil
+	},
+	"route53": func(cfg Config) (Provider, error) {
+		return newRoute53(cfg), nil
+	},
+	"ovh": func(cfg Config) (Provider, error) {
+		return newOVH(cfg)
+	},
+}
+
 // New constructs the provider named by cfg.Name.
 func New(cfg Config) (Provider, error) {
-	switch cfg.Name {
-	case "linode":
-		return newLinode(cfg), nil
-	case "digitalocean":
-		return newDigitalOcean(cfg), nil
-	case "cloudflare":
-		return newCloudflare(cfg), nil
-	case "desec":
-		return newDeSEC(cfg), nil
-	case "hetzner":
-		return newHetzner(cfg), nil
-	case "route53":
-		return newRoute53(cfg), nil
-	case "ovh":
-		o, err := newOVH(cfg)
-		if err != nil {
-			return nil, err
-		}
-		return o, nil
-	default:
+	ctor, ok := constructors[cfg.Name]
+	if !ok {
 		return nil, fmt.Errorf("unsupported dns provider %q", cfg.Name)
 	}
+	return ctor(cfg)
 }
 
 // Supported reports whether name identifies a known provider. Used by config
 // validation to reject typos early.
 func Supported(name string) bool {
-	switch name {
-	case "linode", "digitalocean", "cloudflare", "desec", "hetzner", "route53", "ovh":
-		return true
-	default:
-		return false
-	}
+	_, ok := constructors[name]
+	return ok
 }
 
 // statusError maps an HTTP response status onto the package's sentinel errors

@@ -1,16 +1,13 @@
 package dnsprovider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 const defaultLinodeBaseURL = "https://api.linode.com/v4"
@@ -32,11 +29,7 @@ func newLinode(cfg Config) *linode {
 	if base == "" {
 		base = defaultLinodeBaseURL
 	}
-	hc := cfg.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
-	}
-	return &linode{token: cfg.Token, ttl: cfg.TTL, baseURL: base, client: hc}
+	return &linode{token: cfg.Token, ttl: cfg.TTL, baseURL: base, client: defaultHTTPClient(cfg)}
 }
 
 type linodeDomain struct {
@@ -162,38 +155,12 @@ func (l *linode) resolveDomainID(ctx context.Context, zone string) (int64, error
 }
 
 func (l *linode) do(ctx context.Context, method, url, xfilter string, body any) ([]byte, error) {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal linode request: %w", err)
+	return doJSON(ctx, l.client, "linode", method, url, body, func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+l.token)
+		if xfilter != "" {
+			req.Header.Set("X-Filter", xfilter)
 		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
-	if err != nil {
-		return nil, fmt.Errorf("create linode request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+l.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if xfilter != "" {
-		req.Header.Set("X-Filter", xfilter)
-	}
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("linode API request: %w", err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read linode response: %w", err)
-	}
-	if err := statusError("linode", resp.StatusCode, data, linodeErrReason); err != nil {
-		return nil, err
-	}
-	return data, nil
+	}, linodeErrReason)
 }
 
 // linodeErrReason extracts the human-readable reason(s) from a Linode error

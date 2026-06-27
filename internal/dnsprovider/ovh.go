@@ -69,17 +69,13 @@ func newOVH(cfg Config) (*ovh, error) {
 			return nil, fmt.Errorf("unknown ovh endpoint %q (want ovh-eu, ovh-ca, ovh-us, ...)", name)
 		}
 	}
-	hc := cfg.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
-	}
 	return &ovh{
 		appKey:      cfg.AppKey,
 		appSecret:   cfg.AppSecret,
 		consumerKey: cfg.ConsumerKey,
 		ttl:         cfg.TTL,
 		baseURL:     base,
-		client:      hc,
+		client:      defaultHTTPClient(cfg),
 	}, nil
 }
 
@@ -177,9 +173,9 @@ func (o *ovh) do(ctx context.Context, method, path, rawQuery string, reqBody, ou
 		return fmt.Errorf("ovh API request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	data, err := readResponseBody("ovh", resp.Body)
 	if err != nil {
-		return fmt.Errorf("read ovh response: %w", err)
+		return err
 	}
 	if err := statusError("ovh", resp.StatusCode, data, ovhErrReason); err != nil {
 		return err

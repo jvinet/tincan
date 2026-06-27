@@ -72,16 +72,12 @@ func newRoute53(cfg Config) *route53 {
 	if ttl <= 0 {
 		ttl = 300
 	}
-	hc := cfg.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
-	}
 	return &route53{
 		accessKey: cfg.AccessKey,
 		secretKey: cfg.SecretKey,
 		ttl:       ttl,
 		baseURL:   base,
-		client:    hc,
+		client:    defaultHTTPClient(cfg),
 	}
 }
 
@@ -246,7 +242,7 @@ func (r *route53) putValues(ctx context.Context, zone, name string, values []str
 	}
 	records := make([]r53Record, len(values))
 	for i, v := range values {
-		records[i] = r53Record{Value: `"` + v + `"`} // presentation format; values are quote/backslash-free
+		records[i] = r53Record{Value: quoteTXT(v)} // presentation format; values are quote/backslash-free
 	}
 	rr := r53RRSet{Name: r53FQDN(name, zone), Type: "TXT", TTL: r.ttl, ResourceRecords: records}
 	return r.change(ctx, zone, "UPSERT", rr)
@@ -340,9 +336,9 @@ func (r *route53) do(ctx context.Context, method, reqURL string, body any) ([]by
 		return nil, fmt.Errorf("route53 API request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	data, err := readResponseBody("route53", resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read route53 response: %w", err)
+		return nil, err
 	}
 	if err := statusError("route53", resp.StatusCode, data, route53ErrReason); err != nil {
 		return nil, err

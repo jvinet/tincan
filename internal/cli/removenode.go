@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 )
 
@@ -36,17 +35,9 @@ func (c *RemoveNodeCmd) Run(ctx context.Context, g *Globals) error {
 		return fmt.Errorf("node %q not found", c.Name)
 	}
 	dir.Nodes = append(dir.Nodes[:idx], dir.Nodes[idx+1:]...)
-	if c.NoPublish {
-		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
-			return err
-		}
-	} else {
-		if err := bumpDirectory(&dir); err != nil {
-			return err
-		}
-		if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
-			return err
-		}
+	dir, err = saveAdminDirectory(ctx, cfg, d, dir, c.NoPublish)
+	if err != nil {
+		return err
 	}
 	slog.Info("removed node", "name", c.Name, "freed_ip", node.TunnelIP, "no_publish", c.NoPublish, "serial", dir.Serial)
 	p := newPrinter(os.Stdout)

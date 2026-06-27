@@ -133,6 +133,12 @@ func (s *Server) serve() {
 		reply, forward := respond(query, s.cfg.Domain, s.source())
 		switch {
 		case forward:
+			select {
+			case s.sem <- struct{}{}:
+			default:
+				slog.Debug("dns forward dropped (at concurrency cap)", "client", client)
+				continue
+			}
 			go s.forward(query, client)
 		case reply != nil:
 			if _, err := s.conn.WriteToUDP(reply, client); err != nil {
@@ -148,12 +154,6 @@ func (s *Server) serve() {
 // is double-checked anyway). On failure the client gets SERVFAIL — mobile
 // stub resolvers fail over quickly on SERVFAIL but stall on silence.
 func (s *Server) forward(query []byte, client *net.UDPAddr) {
-	select {
-	case s.sem <- struct{}{}:
-	default:
-		slog.Debug("dns forward dropped (at concurrency cap)", "client", client)
-		return
-	}
 	defer func() { <-s.sem }()
 	reply := s.exchange(query)
 	if reply == nil {

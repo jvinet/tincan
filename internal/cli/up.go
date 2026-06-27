@@ -133,7 +133,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	pout := newPrinter(os.Stdout)
 	perr := newPrinter(os.Stderr)
 
-	controller := relay.NewController(relay.Config{})
+	runtime := newDaemonRuntime(pout)
 	wakeCh := make(chan string, 1)
 	relayTicker := time.NewTicker(relayTickInterval)
 	defer relayTicker.Stop()
@@ -142,26 +142,10 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 	defer stopWatch()
 	startNetworkWatcher(watchCtx, configPath, wakeCh, perr)
 	startAdminPreflight(configPath, pout)
-
-	var dirHolder atomic.Pointer[directory.Directory]
-	dirSource := func() directory.Directory {
-		if p := dirHolder.Load(); p != nil {
-			return *p
-		}
-		return directory.Directory{}
-	}
-	lanStore := startDiscovery(watchCtx, configPath, dirSource, wakeCh, perr)
+	runtime.lanStore = startDiscovery(watchCtx, configPath, discovery.DirectorySource(runtime.dirSource), wakeCh, perr)
 
 	slog.Info("daemon loop started", "pid", os.Getpid(), "config", configPath)
-	prevModes := map[string]relay.Mode{}
-	hSync := &hostsSyncer{}
-	dnsMgr := &dnsServerManager{}
-	defer dnsMgr.stop()
-	// endpointPushedAt records, per peer pubkey, when Apply last pushed an
-	// endpoint into the kernel from configuration. Endpoint observation
-	// consults it so only endpoints validated by a later handshake are ever
-	// republished (see admin.MergeObservations).
-	endpointPushedAt := map[string]time.Time{}
+	defer runtime.dnsMgr.stop()
 	for {
 		cfg, err := config.Load(configPath)
 		if err != nil {
@@ -169,7 +153,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			perr.fail("failed to load config; %v", err)
 		} else {
 			timeout := iterationTimeout(cfg.Sync.Interval.Or(config.DefaultInterval))
-			if err := runDaemonIteration(ctx, cfg, timeout, pout, controller, prevModes, lanStore, &dirHolder, endpointPushedAt, hSync, dnsMgr, dirSource); err != nil {
+			if err := runtime.runIteration(ctx, cfg, timeout); err != nil {
 				slog.Warn("daemon iteration failed", "error", err)
 				perr.fail("daemon iteration failed; %v", err)
 			}
@@ -181,7 +165,7 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 		var onTick func()
 		if cfg != nil {
 			onTick = func() {
-				runRelayTick(cfg, controller, prevModes, lanStore, &dirHolder, endpointPushedAt, pout)
+				runtime.runRelayTick(cfg)
 			}
 		}
 		// Jitter ±10% so a fleet started from one image (e.g. a reboot that
@@ -191,6 +175,44 @@ func runDaemonLoop(ctx context.Context, configPath string) error {
 			return err
 		}
 	}
+}
+
+type daemonRuntime struct {
+	pout             *printer
+	controller       *relay.Controller
+	prevModes        map[string]relay.Mode
+	lanStore         *discovery.Store
+	dirHolder        atomic.Pointer[directory.Directory]
+	dirSource        func() directory.Directory
+	endpointPushedAt map[string]time.Time
+	hSync            *hostsSyncer
+	dnsMgr           *dnsServerManager
+}
+
+func newDaemonRuntime(pout *printer) *daemonRuntime {
+	r := &daemonRuntime{
+		pout:             pout,
+		controller:       relay.NewController(relay.Config{}),
+		prevModes:        map[string]relay.Mode{},
+		endpointPushedAt: map[string]time.Time{},
+		hSync:            &hostsSyncer{},
+		dnsMgr:           &dnsServerManager{},
+	}
+	r.dirSource = func() directory.Directory {
+		if p := r.dirHolder.Load(); p != nil {
+			return *p
+		}
+		return directory.Directory{}
+	}
+	return r
+}
+
+func (r *daemonRuntime) runIteration(ctx context.Context, cfg *config.Config, timeout time.Duration) error {
+	return runDaemonIteration(ctx, cfg, timeout, r.pout, r.controller, r.prevModes, r.lanStore, &r.dirHolder, r.endpointPushedAt, r.hSync, r.dnsMgr, dnsserve.DirectorySource(r.dirSource))
+}
+
+func (r *daemonRuntime) runRelayTick(cfg *config.Config) {
+	runRelayTick(cfg, r.controller, r.prevModes, r.lanStore, &r.dirHolder, r.endpointPushedAt, r.pout)
 }
 
 // jitter returns d perturbed by up to ±10%, never below zero.

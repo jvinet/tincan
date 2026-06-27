@@ -113,6 +113,22 @@ func publishDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir 
 	return nil
 }
 
+func saveAdminDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir directory.Directory, noPublish bool) (directory.Directory, error) {
+	if noPublish {
+		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
+			return directory.Directory{}, err
+		}
+		return dir, nil
+	}
+	if err := bumpDirectory(&dir); err != nil {
+		return directory.Directory{}, err
+	}
+	if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
+		return directory.Directory{}, err
+	}
+	return dir, nil
+}
+
 func bumpDirectory(dir *directory.Directory) error {
 	if dir.Serial == math.MaxUint64 {
 		return errors.New("directory serial overflow")

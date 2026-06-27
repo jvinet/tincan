@@ -1,17 +1,14 @@
 package dnsprovider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 const defaultHetznerBaseURL = "https://dns.hetzner.com/api/v1"
@@ -49,11 +46,7 @@ func newHetzner(cfg Config) *hetzner {
 	if base == "" {
 		base = defaultHetznerBaseURL
 	}
-	hc := cfg.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
-	}
-	return &hetzner{token: cfg.Token, ttl: cfg.TTL, baseURL: base, client: hc}
+	return &hetzner{token: cfg.Token, ttl: cfg.TTL, baseURL: base, client: defaultHTTPClient(cfg)}
 }
 
 type hetznerZone struct {
@@ -221,35 +214,9 @@ func (h *hetzner) resolveZoneID(ctx context.Context, zone string) (string, error
 }
 
 func (h *hetzner) do(ctx context.Context, method, reqURL string, body any) ([]byte, error) {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal hetzner request: %w", err)
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, rdr)
-	if err != nil {
-		return nil, fmt.Errorf("create hetzner request: %w", err)
-	}
-	req.Header.Set("Auth-API-Token", h.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("hetzner API request: %w", err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read hetzner response: %w", err)
-	}
-	if err := statusError("hetzner", resp.StatusCode, data, hetznerErrReason); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return doJSON(ctx, h.client, "hetzner", method, reqURL, body, func(req *http.Request) {
+		req.Header.Set("Auth-API-Token", h.token)
+	}, hetznerErrReason)
 }
 
 // hetznerRelName maps the drop's record label to Hetzner's relative host form:

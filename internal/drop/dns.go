@@ -111,7 +111,12 @@ func (d *DNS) Put(ctx context.Context, data []byte) error {
 	// write is atomic, so unlike the per-record reconciliation below there is no
 	// half-updated window for a reader to observe.
 	if r, ok := d.provider.(dnsprovider.Replacer); ok {
-		if err := r.ReplaceTXT(ctx, d.zone, d.name, desired); err != nil {
+		existing, err := d.provider.ListTXT(ctx, d.zone, d.name)
+		if err != nil {
+			return mapProviderErr(err)
+		}
+		_, foreign := splitTXTRecords(existing)
+		if err := r.ReplaceTXT(ctx, d.zone, d.name, mergeForeignTXTValues(foreign, desired)); err != nil {
 			return mapProviderErr(err)
 		}
 		return nil
@@ -120,9 +125,11 @@ func (d *DNS) Put(ctx context.Context, data []byte) error {
 	if err != nil {
 		return mapProviderErr(err)
 	}
+	existing, _ = splitTXTRecords(existing)
 	// Reconcile in place: reuse existing records by index, create any shortfall,
 	// delete the surplus. This minimizes churn and avoids a window where the
-	// record set is empty.
+	// record set is empty. Only tincan-owned chunks are touched; unrelated TXT
+	// values at the same name (SPF, verification tokens, etc.) are preserved.
 	changed := false
 	for i, value := range desired {
 		switch {
@@ -154,6 +161,64 @@ func (d *DNS) Put(ctx context.Context, data []byte) error {
 		}
 	}
 	return nil
+}
+
+func mergeForeignTXTValues(foreign []dnsprovider.TXTRecord, desired []string) []string {
+	if len(foreign) == 0 {
+		return desired
+	}
+	values := make([]string, 0, len(foreign)+len(desired))
+	for _, record := range foreign {
+		values = append(values, record.Value)
+	}
+	return append(values, desired...)
+}
+
+func splitTXTRecords(records []dnsprovider.TXTRecord) (tincan []dnsprovider.TXTRecord, foreign []dnsprovider.TXTRecord) {
+	type chunkRecord struct {
+		record dnsprovider.TXTRecord
+		seq    int
+		valid  bool
+		order  int
+	}
+	chunks := make([]chunkRecord, 0, len(records))
+	for i, record := range records {
+		if !strings.HasPrefix(record.Value, chunkPrefix+";") {
+			foreign = append(foreign, record)
+			continue
+		}
+		seq, valid := chunkSeq(record.Value)
+		chunks = append(chunks, chunkRecord{record: record, seq: seq, valid: valid, order: i})
+	}
+	sort.SliceStable(chunks, func(i, j int) bool {
+		if chunks[i].valid != chunks[j].valid {
+			return chunks[i].valid
+		}
+		if chunks[i].valid && chunks[j].valid && chunks[i].seq != chunks[j].seq {
+			return chunks[i].seq < chunks[j].seq
+		}
+		return chunks[i].order < chunks[j].order
+	})
+	for _, chunk := range chunks {
+		tincan = append(tincan, chunk.record)
+	}
+	return tincan, foreign
+}
+
+func chunkSeq(value string) (int, bool) {
+	fields := strings.SplitN(value, ";", 4)
+	if len(fields) != 4 {
+		return 0, false
+	}
+	seq, err := strconv.Atoi(fields[1])
+	if err != nil || seq < 0 {
+		return 0, false
+	}
+	total, err := strconv.Atoi(fields[2])
+	if err != nil || total <= 0 {
+		return 0, false
+	}
+	return seq, true
 }
 
 func (d *DNS) Stat(ctx context.Context) (Metadata, error) {

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/renameio/v2"
@@ -41,38 +43,44 @@ func Write(stateDir string, dir directory.Directory, etag string) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureDir(stateDir); err != nil {
-		return err
-	}
-	// The serial file is the rollback high-water mark; never lower it. The
-	// caller's rollback check happens before its fetch is verified, so a
-	// concurrent writer (daemon iteration vs. a manual `tincan sync`) could
-	// otherwise regress the mark and make an old signed blob acceptable
-	// forever. Equal serials are fine — re-applying the current directory is
-	// the steady state.
-	if prev, err := ReadSerial(stateDir); err == nil && dir.Serial < prev {
-		return fmt.Errorf("refusing to lower cached serial from %d to %d; remove %s to reset", prev, dir.Serial, config.SerialPath(stateDir))
-	}
-	// Serial before cache: a crash between the two writes must not leave a
-	// newer cache with an older high-water mark (which would re-open a
-	// one-revision rollback window). The reverse — serial N with cache N-1 —
-	// is safe because equal serials are accepted on the next fetch.
-	if err := writeSerialFile(stateDir, dir.Serial); err != nil {
-		return err
-	}
-	if err := renameio.WriteFile(config.CachePath(stateDir), payload, 0o600); err != nil {
-		return fmt.Errorf("write cache: %w", err)
-	}
-	state := State{LastSync: time.Now().UTC(), LastETag: etag, Serial: dir.Serial}
-	stateBytes, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode state: %w", err)
-	}
-	stateBytes = append(stateBytes, '\n')
-	if err := renameio.WriteFile(config.StatePath(stateDir), stateBytes, 0o600); err != nil {
-		return fmt.Errorf("write state: %w", err)
-	}
-	return nil
+	return withStateLock(stateDir, func() error {
+		// The serial file is the rollback high-water mark; never lower it. The
+		// caller's rollback check happens before its fetch is verified, so a
+		// concurrent writer (daemon iteration vs. a manual `tincan sync`) could
+		// otherwise regress the mark and make an old signed blob acceptable
+		// forever. Equal serials are fine — re-applying the current directory is
+		// the steady state.
+		prev, err := ReadSerial(stateDir)
+		switch {
+		case err == nil:
+			if dir.Serial < prev {
+				return fmt.Errorf("refusing to lower cached serial from %d to %d; remove %s to reset", prev, dir.Serial, config.SerialPath(stateDir))
+			}
+		case errors.Is(err, os.ErrNotExist):
+		default:
+			return fmt.Errorf("read cache serial: %w", err)
+		}
+		// Serial before cache: a crash between the two writes must not leave a
+		// newer cache with an older high-water mark (which would re-open a
+		// one-revision rollback window). The reverse — serial N with cache N-1 —
+		// is safe because equal serials are accepted on the next fetch.
+		if err := writeSerialFile(stateDir, dir.Serial); err != nil {
+			return err
+		}
+		if err := renameio.WriteFile(config.CachePath(stateDir), payload, 0o600); err != nil {
+			return fmt.Errorf("write cache: %w", err)
+		}
+		state := State{LastSync: time.Now().UTC(), LastETag: etag, Serial: dir.Serial}
+		stateBytes, err := json.MarshalIndent(state, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode state: %w", err)
+		}
+		stateBytes = append(stateBytes, '\n')
+		if err := renameio.WriteFile(config.StatePath(stateDir), stateBytes, 0o600); err != nil {
+			return fmt.Errorf("write state: %w", err)
+		}
+		return nil
+	})
 }
 
 func writeSerialFile(stateDir string, serial uint64) error {
@@ -92,13 +100,19 @@ func WriteSerialFloor(stateDir string, serial uint64) error {
 	if serial == 0 {
 		return nil
 	}
-	if prev, err := ReadSerial(stateDir); err == nil && prev >= serial {
-		return nil
-	}
-	if err := ensureDir(stateDir); err != nil {
-		return err
-	}
-	return writeSerialFile(stateDir, serial)
+	return withStateLock(stateDir, func() error {
+		prev, err := ReadSerial(stateDir)
+		switch {
+		case err == nil:
+			if prev >= serial {
+				return nil
+			}
+		case errors.Is(err, os.ErrNotExist):
+		default:
+			return fmt.Errorf("read cache serial: %w", err)
+		}
+		return writeSerialFile(stateDir, serial)
+	})
 }
 
 func ReadSerial(stateDir string) (uint64, error) {
@@ -134,19 +148,18 @@ type DiscoveryState struct {
 }
 
 func WriteDiscovery(stateDir string, snapshot map[string]discovery.LANState) error {
-	if err := ensureDir(stateDir); err != nil {
-		return err
-	}
 	state := DiscoveryState{UpdatedAt: time.Now().UTC(), LANEndpoints: snapshot}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode discovery state: %w", err)
 	}
 	data = append(data, '\n')
-	if err := renameio.WriteFile(config.DiscoveryStatePath(stateDir), data, 0o600); err != nil {
-		return fmt.Errorf("write discovery state: %w", err)
-	}
-	return nil
+	return withStateLock(stateDir, func() error {
+		if err := renameio.WriteFile(config.DiscoveryStatePath(stateDir), data, 0o600); err != nil {
+			return fmt.Errorf("write discovery state: %w", err)
+		}
+		return nil
+	})
 }
 
 func ReadDiscovery(stateDir string) (DiscoveryState, error) {
@@ -174,11 +187,29 @@ func WriteSource(stateDir string, dir directory.Directory) error {
 	if err != nil {
 		return err
 	}
+	return withStateLock(stateDir, func() error {
+		if err := renameio.WriteFile(config.SourcePath(stateDir), payload, 0o600); err != nil {
+			return fmt.Errorf("write source directory: %w", err)
+		}
+		return nil
+	})
+}
+
+func withStateLock(stateDir string, fn func() error) error {
 	if err := ensureDir(stateDir); err != nil {
 		return err
 	}
-	if err := renameio.WriteFile(config.SourcePath(stateDir), payload, 0o600); err != nil {
-		return fmt.Errorf("write source directory: %w", err)
+	f, err := os.OpenFile(filepath.Join(stateDir, ".lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("open state lock: %w", err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock state directory: %w", err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	if err := fn(); err != nil {
+		return err
 	}
 	return nil
 }

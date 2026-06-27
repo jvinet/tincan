@@ -1,17 +1,14 @@
 package dnsprovider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 const defaultCloudflareBaseURL = "https://api.cloudflare.com/client/v4"
@@ -46,11 +43,7 @@ func newCloudflare(cfg Config) *cloudflare {
 	if base == "" {
 		base = defaultCloudflareBaseURL
 	}
-	hc := cfg.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
-	}
-	return &cloudflare{token: cfg.Token, ttl: cfg.TTL, baseURL: base, client: hc}
+	return &cloudflare{token: cfg.Token, ttl: cfg.TTL, baseURL: base, client: defaultHTTPClient(cfg)}
 }
 
 // cfEnvelope is Cloudflare's uniform response wrapper. result is held as raw
@@ -205,35 +198,9 @@ func (c *cloudflare) resolveZoneID(ctx context.Context, zone string) (string, er
 }
 
 func (c *cloudflare) do(ctx context.Context, method, reqURL string, body any) ([]byte, error) {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal cloudflare request: %w", err)
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, rdr)
-	if err != nil {
-		return nil, fmt.Errorf("create cloudflare request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("cloudflare API request: %w", err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read cloudflare response: %w", err)
-	}
-	if err := statusError("cloudflare", resp.StatusCode, data, cloudflareErrReason); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return doJSON(ctx, c.client, "cloudflare", method, reqURL, body, func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}, cloudflareErrReason)
 }
 
 // cfFQDN builds the fully-qualified name Cloudflare stores and filters on. An

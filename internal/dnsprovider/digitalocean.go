@@ -1,16 +1,13 @@
 package dnsprovider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const defaultDigitalOceanBaseURL = "https://api.digitalocean.com/v2"
@@ -39,11 +36,7 @@ func newDigitalOcean(cfg Config) *digitalOcean {
 	if base == "" {
 		base = defaultDigitalOceanBaseURL
 	}
-	hc := cfg.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
-	}
-	return &digitalOcean{token: cfg.Token, ttl: cfg.TTL, baseURL: base, client: hc}
+	return &digitalOcean{token: cfg.Token, ttl: cfg.TTL, baseURL: base, client: defaultHTTPClient(cfg)}
 }
 
 type doRecord struct {
@@ -146,35 +139,9 @@ func doFQDN(rel, zone string) string {
 }
 
 func (d *digitalOcean) do(ctx context.Context, method, reqURL string, body any) ([]byte, error) {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal digitalocean request: %w", err)
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, rdr)
-	if err != nil {
-		return nil, fmt.Errorf("create digitalocean request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+d.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("digitalocean API request: %w", err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read digitalocean response: %w", err)
-	}
-	if err := statusError("digitalocean", resp.StatusCode, data, doErrReason); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return doJSON(ctx, d.client, "digitalocean", method, reqURL, body, func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+d.token)
+	}, doErrReason)
 }
 
 // doErrReason extracts the human-readable message from a DigitalOcean error

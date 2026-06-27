@@ -1,14 +1,11 @@
 package dnsprovider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 const (
@@ -58,11 +55,7 @@ func newDeSEC(cfg Config) *deSEC {
 	if ttl <= 0 {
 		ttl = defaultDeSECTTL
 	}
-	hc := cfg.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
-	}
-	return &deSEC{token: cfg.Token, ttl: ttl, baseURL: base, client: hc}
+	return &deSEC{token: cfg.Token, ttl: ttl, baseURL: base, client: defaultHTTPClient(cfg)}
 }
 
 type desecRRset struct {
@@ -169,7 +162,7 @@ func (s *deSEC) putRecords(ctx context.Context, zone, name string, values []stri
 	}
 	records := make([]string, len(values))
 	for i, v := range values {
-		records[i] = `"` + v + `"` // presentation format; values are quote/backslash-free
+		records[i] = quoteTXT(v) // presentation format; values are quote/backslash-free
 	}
 	body := desecRRset{Subname: bodySubname(name), Type: "TXT", TTL: s.ttl, Records: records}
 	status, data, err := s.do(ctx, http.MethodPut, s.rrsetURL(zone, name), body)
@@ -206,32 +199,9 @@ func (s *deSEC) rrsetsURL(zone string) string {
 // do issues the request and returns the status and body without mapping it to a
 // sentinel error, so callers (getRecords) can treat 404 specially.
 func (s *deSEC) do(ctx context.Context, method, reqURL string, body any) (int, []byte, error) {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return 0, nil, fmt.Errorf("marshal desec request: %w", err)
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, rdr)
-	if err != nil {
-		return 0, nil, fmt.Errorf("create desec request: %w", err)
-	}
-	req.Header.Set("Authorization", "Token "+s.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return 0, nil, fmt.Errorf("desec API request: %w", err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return 0, nil, fmt.Errorf("read desec response: %w", err)
-	}
-	return resp.StatusCode, data, nil
+	return doJSONRaw(ctx, s.client, "desec", method, reqURL, body, func(req *http.Request) {
+		req.Header.Set("Authorization", "Token "+s.token)
+	})
 }
 
 // urlSubname is the host label as it appears in the RRset URL path; the zone
@@ -266,16 +236,6 @@ func splitDesecID(id string) (name, value string) {
 		return before, after
 	}
 	return "", id
-}
-
-// unquoteTXT strips the surrounding double quotes deSEC stores TXT values with.
-// tincan writes single-string values under 255 bytes, so a single quote pair is
-// all there is to remove.
-func unquoteTXT(s string) string {
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		return s[1 : len(s)-1]
-	}
-	return s
 }
 
 // desecErrReason extracts the human-readable message from a deSEC error body,

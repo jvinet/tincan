@@ -219,6 +219,59 @@ func TestDNSPutReconcileShrinks(t *testing.T) {
 	}
 }
 
+func TestDNSPutPreservesForeignTXT(t *testing.T) {
+	big := bytes.Repeat([]byte("x"), 3000)
+	bigChunks, err := chunkBlob(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeProvider{
+		records: []dnsprovider.TXTRecord{{ID: "spf", Value: "v=spf1 include:_spf.example.com ~all"}},
+		nextID:  len(bigChunks),
+	}
+	for i, value := range bigChunks {
+		f.records = append(f.records, dnsprovider.TXTRecord{ID: fmt.Sprintf("tc%d", i), Value: value})
+	}
+	d := dnsBackedBy(f)
+
+	if err := d.Put(context.Background(), []byte("tiny")); err != nil {
+		t.Fatal(err)
+	}
+	if f.records[0].ID != "spf" || f.records[0].Value != "v=spf1 include:_spf.example.com ~all" {
+		t.Fatalf("foreign TXT record was changed: %+v", f.records[0])
+	}
+	got, err := d.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte("tiny")) {
+		t.Fatal("Put/Get round-trip mismatch with foreign TXT present")
+	}
+}
+
+func TestDNSPutReconcileSortsExistingChunks(t *testing.T) {
+	blob := bytes.Repeat([]byte("directory-blob;"), 50)
+	chunks, err := chunkBlob(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("want multiple chunks, got %d", len(chunks))
+	}
+	f := &fakeProvider{nextID: len(chunks)}
+	for i := len(chunks) - 1; i >= 0; i-- {
+		f.records = append(f.records, dnsprovider.TXTRecord{ID: fmt.Sprintf("r%d", i), Value: chunks[i]})
+	}
+	d := dnsBackedBy(f)
+
+	if err := d.Put(context.Background(), blob); err != nil {
+		t.Fatal(err)
+	}
+	if f.creates != 0 || f.updates != 0 || f.deletes != 0 {
+		t.Fatalf("reordered existing chunks caused writes (creates=%d updates=%d deletes=%d)", f.creates, f.updates, f.deletes)
+	}
+}
+
 // flushingProvider is a fakeProvider that also implements dnsprovider.Flusher,
 // counting Flush calls so the drop's commit behavior can be asserted.
 type flushingProvider struct {

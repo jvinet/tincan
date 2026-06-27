@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
 )
@@ -57,17 +56,9 @@ func (c *SetDomainCmd) Run(ctx context.Context, g *Globals) error {
 		}
 		dir.Domain = domain
 	}
-	if c.NoPublish {
-		if err := cache.WriteSource(cfg.Sync.StateDir, dir); err != nil {
-			return err
-		}
-	} else {
-		if err := bumpDirectory(&dir); err != nil {
-			return err
-		}
-		if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
-			return err
-		}
+	dir, err = saveAdminDirectory(ctx, cfg, d, dir, c.NoPublish)
+	if err != nil {
+		return err
 	}
 	if c.Clear {
 		slog.Info("cleared VPN domain", "no_publish", c.NoPublish, "serial", dir.Serial)
