@@ -76,19 +76,19 @@ do not auto-update. Optional VPN names let you reach nodes as, for example,
 
 ## Simple enrollment
 
-Enrolling a new node is very simple:
+Enrolling a new node is very simple.
 
 On the admin node:
 
-```sh
-$ sudo tincan add-node --name groot --bootstrap groot.json
+```
+[jvinet@admin ~]$ sudo tincan add-node --name groot --bootstrap groot.json
 ```
 
 Then copy the bootstrap JSON file to the new client and:
 
-```sh
-$ sudo tincan join --bootstrap groot.json
-$ sudo tincan up --daemon
+```
+[jvinet@client ~]$ sudo tincan join --bootstrap groot.json
+[jvinet@client ~]$ sudo tincan up --daemon
 ```
 
 ## Documentation
