@@ -4,7 +4,7 @@
 
 Tincan is a small, self-hosted mesh-VPN orchestration tool for WireGuard.
 
-It does a bit more than a plan Wireguard setup, and a lot less than Tailscale,
+It does a bit more than a plain Wireguard setup, and a lot less than Tailscale,
 Netbird, etc. Tincan is somewhat unique in that it does not rely on an always-on
 coordination service. At least, not directly.
 
