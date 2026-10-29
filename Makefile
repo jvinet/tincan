@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration lint fmt
+.PHONY: build install test test-race test-integration lint fmt
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -10,6 +10,10 @@ LDFLAGS := -X 'github.com/jvinet/tincan/internal/version.Version=$(VERSION)' \
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o ./bin/tincan ./cmd/tincan
+
+install: build
+	install -Dm755 ./bin/tincan $(DESTDIR)/usr/local/bin/tincan
+	install -Dm644 ./misc/tincan.service $(DESTDIR)/etc/systemd/system/tincan.service
 
 test:
 	go test ./...
