@@ -104,7 +104,7 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 		return err
 	}
 	p.headline("bringing up interface %s", cfg.Wireguard.Interface)
-	if _, err := manager.Apply(self, dir, nil, nil); err != nil {
+	if _, err := manager.Apply(self, dir, initialRelayedPeers(self, dir), nil); err != nil {
 		slog.Error("apply failed", "error", err)
 		return err
 	}
@@ -115,6 +115,12 @@ func runUpOnce(ctx context.Context, cfg *config.Config, noSync bool, p *printer)
 	slog.Info("up complete", "interface", cfg.Wireguard.Interface, "tunnel_ip", self.TunnelIP, "peers", len(dir.Nodes)-1)
 	p.headline("setting IP address: %s", tunnelDisplay(self.TunnelIP, dir.NetworkCIDR))
 	return nil
+}
+
+// initialRelayedPeers applies topology-required spoke routing even without a
+// daemon. Failure detection and recovery for Tincan peers still need the loop.
+func initialRelayedPeers(self directory.Node, dir directory.Directory) map[string]bool {
+	return relay.NewController(relay.Config{}).Update(self, dir, nil, time.Now()).Relayed
 }
 
 func tunnelDisplay(tunnelIP, networkCIDR string) string {
@@ -466,9 +472,9 @@ func recordEndpointPushes(pushedAt map[string]time.Time, pushed []string, dir di
 // markLANFailures invalidates LAN endpoints for peers that just transitioned
 // DIRECT → RELAYED. The kernel was using whatever chooseEndpoint picked
 // (operator > LAN > observed), and a stale-handshake transition is the
-// signal that endpoint isn't working. Blacklisting clears on the next
-// beacon that arrives, by virtue of LearnedAt > FailedAt. Peers behind the
-// same NAT as self bypass the blacklist (chooseEndpoint looks up with
+// signal that endpoint isn't working. Only a beacon advertising a different
+// endpoint clears the blacklist. Peers behind the same NAT as self bypass
+// the blacklist (chooseEndpoint looks up with
 // staleOK=true): their observed endpoint is a hairpin address, so the
 // last-known LAN endpoint stays the probe target regardless.
 func markLANFailures(states map[string]relay.PeerState, prev map[string]relay.Mode, lanStore *discovery.Store, now time.Time) {
@@ -541,13 +547,32 @@ func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Ma
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return fmt.Errorf("[observe].enabled requires admin role: %w", err)
 	}
+	unlock, err := cache.LockAdmin(cfg.Sync.StateDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	d, err := loadAdminDrop(cfg)
+	if err != nil {
+		return err
+	}
+	remote, err := fetchDirectory(ctx, cfg, d)
+	if err != nil {
+		return fmt.Errorf("fetch directory before observation: %w", err)
+	}
+	if remote.Serial < syncedSerial {
+		return fmt.Errorf("published serial %d is older than synced serial %d", remote.Serial, syncedSerial)
+	}
 	source, err := cache.ReadSource(cfg.Sync.StateDir)
 	if err != nil {
 		return fmt.Errorf("read source directory: %w", err)
 	}
-	if syncedSerial > source.Serial {
-		source.Serial = syncedSerial
+	if pendingAdminChanges(source, remote) {
+		slog.Debug("skipping endpoint observation while admin changes are pending")
+		return nil
 	}
+	// Observe the latest published membership, never a restored older source.
+	source = remote
 	peers, err := manager.Peers()
 	if err != nil {
 		return err
@@ -557,11 +582,7 @@ func runAdminObservation(ctx context.Context, cfg *config.Config, manager *wg.Ma
 	if !changed {
 		return nil
 	}
-	if err := bumpDirectory(&updated); err != nil {
-		return err
-	}
-	d, err := loadAdminDrop(cfg)
-	if err != nil {
+	if err := preparePublishSerial(cfg, &updated, remote, nil, false); err != nil {
 		return err
 	}
 	if err := publishDirectory(ctx, cfg, d, updated, true); err != nil {

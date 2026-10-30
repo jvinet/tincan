@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
 )
@@ -36,6 +37,11 @@ func (c *SetDomainCmd) Run(ctx context.Context, g *Globals) error {
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return err
 	}
+	unlock, err := cache.LockAdmin(cfg.Sync.StateDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	d, err := loadAdminDrop(cfg)
 	if err != nil {
 		return err

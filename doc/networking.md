@@ -28,7 +28,8 @@ The setting only takes effect on an admin node (one with a publisher key and a
 `[drop.admin]`); a client that leaves it unset never observes.
 
 The admin must already be a daemon (`tincan up --daemon` or under systemd) so
-that observation runs each `[sync].interval`. No client-side configuration is
+that observation runs each `[sync].interval`. Observation pauses while the admin
+has deferred (`--no-publish`) edits in its working directory. No client-side configuration is
 required — clients automatically prefer an operator-configured `Endpoint`,
 then fall back to the admin's observation.
 
@@ -84,14 +85,16 @@ detection entirely. A spoke's enrolled config knows only its hub, so no
 other node can ever reach it directly: it never initiates handshakes to
 them, and drops theirs as coming from unknown keys. Every node except the
 hub therefore routes the spoke's traffic through the hub from the first
-iteration — including nodes that have their own public endpoint, which
-never relay tincan peers — and the spoke's shadow peer carries no endpoint
+apply (including one-shot `tincan up`) — even nodes that have their own public
+endpoint, which never relay tincan peers. The spoke's shadow peer carries no endpoint
 or keepalive, since a background probe could never complete.
 
 `tincan status` shows the chosen mode per peer (`direct` or `relayed via X`).
 Per-peer mode lives in daemon memory; on daemon restart all peers start in
-direct mode and converge to relayed within ~3 minutes if the direct path
-is broken.
+direct mode and converge to relayed after roughly 3 minutes plus up to one
+30-second relay tick if the direct path is broken. Structurally relayed
+plain-WireGuard spokes are the exception: they are routed through their hub
+immediately.
 
 ### Limitations
 
@@ -112,15 +115,19 @@ pairs the source IP with the announced port to learn a candidate LAN
 endpoint and points WireGuard at it directly.
 
 There's no admin coordination — discovery is purely client-to-client on
-the LAN. Authentication is implicit: a spoofed beacon causes one failed
-handshake (the attacker doesn't have the private key) and falls back to
-the relay; nothing leaks. See [LAN discovery design](../spec/lan-discovery.md) for the full
-protocol.
+the LAN. Beacons are not authenticated; the subsequent WireGuard handshake
+proves possession of the peer's key. A spoofed candidate cannot decrypt traffic,
+but can delay direct connectivity until failure detection switches to relay.
+Working kernel endpoints are preserved, and failed candidates are blacklisted
+unless the same-NAT recovery heuristic applies. See
+[LAN discovery design](../spec/lan-discovery.md) for the protocol and trust model.
 
 Enabled by default. Disable per-node by setting `[discovery].enabled =
-false`. Status output tags LAN-direct peers with `(lan)` after their
-endpoint, and `tincan status --json` exposes the learned endpoints under
-`.discovery`:
+false` and restarting the daemon. Discovery settings are startup-only; SIGHUP
+does not restart its sockets or sender. Text status displays private/link-local
+direct endpoints as `LAN` in the STATUS column; this is an address-based label,
+not proof that discovery supplied the endpoint. `tincan status --json` exposes
+the learned endpoints under `.discovery`:
 
 ```sh
 tincan status --json | jq '.discovery.lan_endpoints'

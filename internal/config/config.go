@@ -40,6 +40,17 @@ func Default() Config {
 }
 
 func Load(path string) (*Config, error) {
+	return load(path, false)
+}
+
+// LoadIncomplete reads a join-generated skeleton before enrollment is complete.
+// It remains strict about unknown fields and validates the WireGuard keypair,
+// but permits missing directory keys and unfinished drop coordinates.
+func LoadIncomplete(path string) (*Config, error) {
+	return load(path, true)
+}
+
+func load(path string, allowIncomplete bool) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open config: %w", err)
@@ -52,7 +63,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("decode config: %w", explainDecodeError(err))
 	}
 	cfg.ApplyDefaults()
-	if err := cfg.Validate(false); err != nil {
+	if err := cfg.Validate(allowIncomplete); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -81,10 +92,17 @@ func explainDecodeError(err error) error {
 	return fmt.Errorf("unknown fields: %s", strings.Join(items, "; "))
 }
 
-// Save writes a complete configuration: every default is materialized so the
-// file lists all sections and fields applicable to the node.
+// Save materializes defaulted settings, including DNS hosts management.
+// Optional automatic policies (e.g. dns.serve) remain unset.
 func Save(path string, cfg Config) error {
 	cfg.ApplyDefaults()
+	if cfg.DNS.ManageHosts == nil {
+		enabled := true
+		cfg.DNS.ManageHosts = &enabled
+	}
+	if cfg.DNS.HostsPath == "" {
+		cfg.DNS.HostsPath = "/etc/hosts"
+	}
 	return writeConfig(path, cfg)
 }
 
@@ -191,6 +209,9 @@ func applyBackendDefaults(b *DropBackend) {
 		// write (provider) side only; read-only client configs stay clean.
 		if b.Provider != "" && b.TTL == 0 {
 			b.TTL = 300
+			if b.Provider == "desec" {
+				b.TTL = 3600
+			}
 		}
 	}
 	if b.Type == "nostr" && b.Identifier == "" {

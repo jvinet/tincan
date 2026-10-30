@@ -4,7 +4,7 @@
 
 ## Running as a daemon
 
-`tincan up --daemon` double-forks into the background, writes a PID file
+`tincan up --daemon` re-execs a child into a detached session, writes a PID file
 (default `/run/tincan.pid`), and reconciles every `[sync].interval`
 (default `5m`) by syncing from the drop and re-applying the directory.
 
@@ -12,6 +12,14 @@ Signals the daemon understands:
 
 - `SIGHUP` — reload `config.toml` and run an iteration immediately
 - `SIGTERM` / `SIGINT` — clean shutdown
+
+The config is also re-read on each regular reconciliation. Discovery settings
+(`enabled`, multicast groups, cadence, TTL), the network watcher's interface
+filter, and the daemon's PID-file lock are initialized at startup. Restart the
+daemon after changing `[discovery]`, `[wireguard].interface`, or
+`[sync].pid_file`; SIGHUP alone does not recreate those resources. Tear down the
+old interface before switching its name, and stop the daemon using its old
+PID-file setting before changing that setting.
 
 `tincan down --stop` sends `SIGTERM` to the PID-file process and waits for it to
 exit before tearing down the interface, so the daemon can't re-apply the
@@ -79,10 +87,16 @@ tail -f /var/log/daemon.log   # classic syslog
 - `/etc/tincan/config.toml` — primary config, mode `0600`
 - `/etc/hosts` — managed block between markers, only while the directory
   carries a VPN domain (see [VPN DNS names](dns.md))
-- `/var/lib/tincan/cache.bin` — last successfully-applied directory
+- `/var/lib/tincan/cache.bin` — last successfully synced or published directory;
+  it may not yet have been applied to WireGuard
 - `/var/lib/tincan/cache.serial` — monotonic serial guard against rollback
+- `/var/lib/tincan/publish.serial` — admin-only high-water mark for upload
+  reservations; kept separate so failed uploads do not invalidate offline cache use
 - `/var/lib/tincan/state.json` — sync metadata (last sync time, ETag)
 - `/var/lib/tincan/discovery.json` — learned LAN endpoints (see [LAN peer discovery](networking.md#lan-peer-discovery))
 - `/var/lib/tincan/directory-source.bin` — admin-only working directory
 - `/var/lib/tincan/netboot.json` — admin-only network bootstrap (mode `0600`)
+- `/var/lib/tincan/.lock` — short-lived state-file write lock
+- `/var/lib/tincan/.admin.lock` — local admin transaction lock (commands and
+  background observation; not cross-machine coordination)
 - `/run/tincan.pid` — daemon PID file

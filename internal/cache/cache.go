@@ -116,7 +116,11 @@ func WriteSerialFloor(stateDir string, serial uint64) error {
 }
 
 func ReadSerial(stateDir string) (uint64, error) {
-	data, err := os.ReadFile(config.SerialPath(stateDir))
+	return readSerial(config.SerialPath(stateDir))
+}
+
+func readSerial(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, err
 	}
@@ -193,6 +197,25 @@ func WriteSource(stateDir string, dir directory.Directory) error {
 		}
 		return nil
 	})
+}
+
+// LockAdmin serializes local admin read-modify-publish transactions, including
+// daemon observations. It is separate from the short-lived state-file lock so
+// publishing can safely update the cache while holding it. It does not
+// coordinate administrators on different machines.
+func LockAdmin(stateDir string) (unlock func(), err error) {
+	if err := ensureDir(stateDir); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(stateDir, ".admin.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open admin lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("lock admin directory: %w", err)
+	}
+	return func() { _ = f.Close() }, nil
 }
 
 func withStateLock(stateDir string, fn func() error) error {

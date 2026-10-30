@@ -62,7 +62,7 @@ func TestInitConfigMinimalVsFull(t *testing.T) {
 	// are unlikely to be changed; --full-config materializes all of them.
 	// ([sync] itself appears in both since --state-dir is an explicit override,
 	// but its defaulted interval/pid_file fields should only show up in --full.)
-	defaulted := []string{"interface =", "mtu =", "interval =", "pid_file =", "[observe]", "[discovery]"}
+	defaulted := []string{"interface =", "mtu =", "interval =", "pid_file =", "[observe]", "[discovery]", "[dns]", "manage_hosts =", "hosts_path ="}
 
 	minimal := initConfig(t, false)
 	for _, want := range defaulted {

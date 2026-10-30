@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jvinet/tincan/internal/bootstrap"
+	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 	"github.com/jvinet/tincan/internal/directory"
 	"github.com/jvinet/tincan/internal/keys"
@@ -56,6 +57,11 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return err
 	}
+	unlock, err := cache.LockAdmin(cfg.Sync.StateDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	d, err := loadAdminDrop(cfg)
 	if err != nil {
 		return err
@@ -133,8 +139,7 @@ func (c *AddNodeCmd) Run(ctx context.Context, g *Globals) error {
 	}
 
 	// Render and write the file-based WireGuard artifacts before publishing: a
-	// bad path should fail here, not after the node is in the directory (there
-	// is no command to regenerate a plain-WireGuard config for an existing node).
+	// bad path should fail here, not after the node is in the directory.
 	wgConf := ""
 	if wgClient {
 		wgConf = renderWGQuickConfig(generatedPrivateKey, tunnelIP, dir.NetworkCIDR, dir.Domain, hub)

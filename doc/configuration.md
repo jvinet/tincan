@@ -25,11 +25,11 @@ network_identity = "AGE-SECRET-KEY-1..."   # this node's own age secret (unique 
 publisher_pubkey = "..."                   # admin's Ed25519 public key (every node)
 publisher_key    = "..."                   # admin's Ed25519 private key (admins only)
 
-[drop.admin]    # admin-only: where this node writes the directory
+[drop.admin]    # admin-only: where this node writes AND reads the directory
 type = "s3"   # or "http" / "dns" / "nostr" / "file" — see dead-drop-backends.md
 # ...backend-specific fields...
 
-[drop.client]   # how every node reads the directory
+[drop.client]   # how non-admin nodes read; also exported in bootstraps
 type = "s3"
 # ...backend-specific fields...
 
@@ -46,7 +46,7 @@ pid_file          = "/run/tincan.pid"
 enabled         = true         # default on for admins; set false to stop discovering NAT'd peer endpoints
 handshake_fresh = "3m"         # how recent a peer handshake must be to count as observed
 
-[discovery]                    # LAN peer discovery via multicast beacons
+[discovery]                    # LAN peer discovery; changes require a daemon restart
 enabled         = true         # default on; set false to suppress beacon send/receive
 multicast_ipv4  = "239.255.84.67:51821"
 multicast_ipv6  = "[ff02::1:8443]:51821"
@@ -63,3 +63,8 @@ manage_hosts = true            # default on; maintain the managed /etc/hosts blo
 
 Defaults are populated automatically; you usually only need to set
 `[wireguard]`, `[directory]`, `[drop.admin]` (admin only), and `[drop.client]`.
+
+When `[drop.admin]` is present, it is also used for reads by `sync`, `status`,
+and directory commands. In a file-to-HTTP setup, the admin therefore checks its
+local file, not the HTTP/CDN path that clients use. See [Operations](operations.md)
+for the settings that require a restart rather than SIGHUP.

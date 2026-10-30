@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -51,19 +52,37 @@ func fetchDirectory(ctx context.Context, cfg *config.Config, d drop.Drop) (direc
 	return dir, nil
 }
 
+// fetchAdminDirectory preserves deferred edits in the working copy. A newer
+// remote wins over an older local source (e.g. after restoring a backup).
+// Callers hold the admin lock throughout fetch, mutation, and save.
 func fetchAdminDirectory(ctx context.Context, cfg *config.Config, d drop.Drop) (directory.Directory, error) {
-	dir, err := fetchDirectory(ctx, cfg, d)
-	if err == nil {
-		return dir, nil
-	}
-	newPrinter(os.Stderr).fail("failed to fetch current directory from drop, trying local source; %v", err)
-	if source, sourceErr := cache.ReadSource(cfg.Sync.StateDir); sourceErr == nil {
+	remote, fetchErr := fetchDirectory(ctx, cfg, d)
+	source, sourceErr := cache.ReadSource(cfg.Sync.StateDir)
+	if sourceErr == nil && (fetchErr != nil || source.Serial >= remote.Serial) {
 		return source, nil
+	}
+	if sourceErr != nil && !errors.Is(sourceErr, os.ErrNotExist) {
+		return directory.Directory{}, fmt.Errorf("read working directory: %w", sourceErr)
+	}
+	if fetchErr == nil {
+		return remote, nil
 	}
 	if cached, _, cacheErr := cache.Read(cfg.Sync.StateDir); cacheErr == nil {
 		return cached, nil
 	}
-	return directory.Directory{}, err
+	return directory.Directory{}, fetchErr
+}
+
+// pendingAdminChanges prevents background observation from publishing edits
+// explicitly staged with --no-publish. Compare canonical payloads, not just
+// serials: a deferred edit deliberately retains the published serial.
+func pendingAdminChanges(source, remote directory.Directory) bool {
+	if source.Serial < remote.Serial {
+		return false
+	}
+	a, errA := directory.MarshalPlain(source)
+	b, errB := directory.MarshalPlain(remote)
+	return errA != nil || errB != nil || !bytes.Equal(a, b)
 }
 
 // reconcilePublishSerial adopts the remote directory's serial when it is
@@ -91,9 +110,33 @@ func reconcilePublishSerial(source *directory.Directory, remote directory.Direct
 	}
 }
 
+// preparePublishSerial is shared by explicit publishes, admin mutations, and
+// observation. The local floor also covers uploads that may have succeeded
+// remotely but returned an error before the working copy could be updated.
+func preparePublishSerial(cfg *config.Config, dir *directory.Directory, remote directory.Directory, fetchErr error, force bool) error {
+	if err := reconcilePublishSerial(dir, remote, fetchErr, force); err != nil {
+		return err
+	}
+	for _, read := range []func(string) (uint64, error){cache.ReadSerial, cache.ReadPublishSerial} {
+		floor, err := read(cfg.Sync.StateDir)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read local serial floor: %w", err)
+		}
+		if floor > dir.Serial {
+			dir.Serial = floor
+		}
+	}
+	return bumpDirectory(dir)
+}
+
 func publishDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, dir directory.Directory, writeSource bool) error {
 	blob, err := directory.Seal(dir, cfg.Directory.PublisherKey)
 	if err != nil {
+		return err
+	}
+	// Reserve before upload: even an ambiguous upload failure must never let
+	// another local writer sign a different payload under this serial.
+	if err := cache.ReservePublishSerial(cfg.Sync.StateDir, dir.Serial); err != nil {
 		return err
 	}
 	if err := d.Put(ctx, blob); err != nil {
@@ -120,7 +163,8 @@ func saveAdminDirectory(ctx context.Context, cfg *config.Config, d drop.Drop, di
 		}
 		return dir, nil
 	}
-	if err := bumpDirectory(&dir); err != nil {
+	remote, fetchErr := fetchDirectory(ctx, cfg, d)
+	if err := preparePublishSerial(cfg, &dir, remote, fetchErr, false); err != nil {
 		return directory.Directory{}, err
 	}
 	if err := publishDirectory(ctx, cfg, d, dir, true); err != nil {
@@ -177,9 +221,8 @@ func configExists(path string) (bool, error) {
 
 func boolPtr(b bool) *bool { return &b }
 
-// saveConfig writes the generated config either in full (every applicable
-// section and field at its default) or minimal (only the fields explicitly
-// set, which are the ones likely or required to be changed).
+// saveConfig writes either materialized defaults and common toggles, or just
+// explicitly set fields. Optional automatic policies remain unset in both.
 func saveConfig(path string, cfg config.Config, full bool) error {
 	if full {
 		return config.Save(path, cfg)

@@ -4,15 +4,16 @@
 
 ## Requirements
 
-- Linux with the `wireguard` kernel module (or `wireguard-go`) available
+- Linux with kernel WireGuard support (`wireguard` module); Tincan creates
+  the interface through netlink and does not launch `wireguard-go`
 - `CAP_NET_ADMIN` to manage the tunnel interface — in practice, run
   `tincan up` as root or under a systemd unit with the capability granted
-- Go 1.24+ to build from source
+- Go 1.25+ to build from source
 
 ## Build
 
 ```sh
-go build -o ./bin/tincan ./cmd/tincan
+CGO_ENABLED=0 go build -o ./bin/tincan ./cmd/tincan
 # or
 make build
 ```
@@ -47,16 +48,19 @@ sudo tincan init \
   admin)
 - a local "working directory" containing just this one node
 
-It prints all the generated keys to stdout, including the secrets you need to
-distribute. **Save these somewhere safe** — `init` does not.
+It also prints the generated keys, including secrets, to stdout. They are saved
+in the config, but **back them up somewhere safe** — `init` does not create a
+separate backup. Keep the admin's private keys on the admin; clients receive
+their own keys through enrollment, not the admin's age identity.
 
 Pass `--force` to overwrite an existing config, or `--state-dir /path` to put
 the cache and its sibling state files somewhere other than the default
 `/var/lib/tincan`.
 
 By default the generated config is minimal: it lists only the fields you are
-likely or required to change. Pass `--full-config` to instead write every
-section and field that applies to this role, each at its default value.
+likely or required to change. Pass `--full-config` to materialize defaulted
+settings and common toggles for this role, including `[dns]`. Optional automatic
+policies such as `[dns].serve` remain unset.
 
 Now edit `/etc/tincan/config.toml` and fill in `[drop.admin]` (where this node
 writes the directory) and `[drop.client]` (how other nodes read it). For most
@@ -91,7 +95,11 @@ channel and delete it after the client has joined.
 If the operator has already generated their own keys locally (via
 `tincan join --generate-key`), pass `--pub-key` **and** `--age-recipient` so
 neither secret ever leaves their machine. The bootstrap file is still useful in
-that case — it just won't contain the secrets.
+that case — it just won't contain the secrets. On the same client, finish with
+`sudo tincan join --bootstrap /tmp/bob.json --force`: Tincan checks the bootstrap's
+public key against the existing config and preserves both locally generated
+keypairs, the state directory, and local runtime settings. Do not pass
+`--generate-key` again.
 
 `--endpoint` is optional. Omit it for nodes that sit behind NAT and dial out;
 include `host:port` for nodes that are publicly reachable. The port you publish
@@ -109,24 +117,32 @@ dependent. See [Relay fallback](networking.md#relay-fallback).
 Other admin commands:
 
 ```sh
-sudo tincan list-nodes        # show the current directory
+sudo tincan list-nodes        # show the published directory (not deferred edits)
 sudo tincan remove-node --name bob
 sudo tincan publish           # re-publish the working directory
 ```
 
 `add-node` and `remove-node` publish automatically; pass `--no-publish` to defer
-the upload (changes are saved to the working directory). `publish` is for
-re-issuing after deferred edits or to recover from a partial upload.
+the upload (changes accumulate in the working directory). A later automatic
+publish includes those deferred edits too; use `publish` to issue them without
+another mutation. Background endpoint observation pauses while edits are staged,
+so it cannot publish them unexpectedly.
 
 `remove-node` is also how you **revoke** a node: the publish that follows
 re-encrypts the directory to the remaining members' recipients only, so the
 removed node can no longer decrypt new directories. It keeps whatever blob it
 already cached but is locked out of every future one — no fleet-wide rekey.
 
-Before uploading, `publish` fetches the directory currently at the drop so it
-never reuses an already-published serial. If that fetch fails (an empty drop
-on first publish is fine), it refuses to proceed — pass `--force` to publish
-anyway when you know the drop contents are older than your working directory.
+All publishing paths check the current remote serial and the local serial
+floor before uploading. A failed remote fetch or verification refuses the
+upload (an empty drop on first publish is fine). You can still stage edits
+with `--no-publish`, then explicitly `publish --force` when you know the drop
+contents are older than your working directory. `--force` bypasses the remote
+check, not the local serial floor. Serials are reserved before upload, so a
+failed upload can leave a gap in the sequence.
+
+Local admin commands and daemon observation are serialized. Writers on different
+admin machines are **not** coordinated; use one publishing machine.
 
 ### 3. Bring up a client node
 
@@ -141,7 +157,10 @@ sudo tincan up
 `join --bootstrap` populates `[directory]` (the node's own `network_identity`
 and the `publisher_pubkey`), `[drop.client]`, the node's `listen_port` (when the
 admin published an endpoint for it), and (if the admin generated it) the
-WireGuard keypair from the bootstrap. Nothing else to edit. The bootstrap also
+WireGuard keypair from the bootstrap. With admin-generated secrets, nothing
+else needs editing. For locally generated keys, use the existing config and
+`--force` as described above; a secret-free bootstrap alone cannot supply the
+node's age identity. The bootstrap also
 carries the directory serial current at enrollment, which `join` seeds as the
 node's rollback floor — even the first sync refuses a directory older than the
 bootstrap.
@@ -162,8 +181,8 @@ reads it from a file, and you fill `[directory].network_identity` (this node's
 age secret) by hand.
 
 Pass `--force` to overwrite an existing config, or `--state-dir /path` to use a
-non-default state directory. As with `init`, `--full-config` writes every
-applicable section and field at its default instead of the minimal set.
+non-default state directory. As with `init`, `--full-config` materializes
+defaulted settings instead of writing only the minimal set.
 
 If you joined without a node bootstrap, edit the config and fill in:
 
@@ -219,8 +238,8 @@ you'll get an error). Traffic toward the client works the same way: its config
 knows only the hub, so every other node automatically routes the client's
 tunnel IP through the hub (see [Relay fallback](networking.md#relay-fallback)). It's a
 point-in-time snapshot — the device doesn't run Tincan, so it won't pick up
-later directory changes (rotated keys, moved endpoints, new nodes); re-run to
-refresh it.
+later directory changes (rotated keys, moved endpoints, new nodes); use
+`render-node` to refresh it.
 
 Lost the config for a node that's already enrolled? `tincan render-node --name
 phone` regenerates its `wg-quick` config from the current directory. The admin

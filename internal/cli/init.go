@@ -23,7 +23,7 @@ type InitCmd struct {
 	Relay      bool   `help:"Mark this admin node as a relay: peers route through it when a direct path is unavailable (requires --endpoint)."`
 	DNSDomain  string `name:"dns-domain" help:"Optional VPN DNS domain (e.g. \"vpn\"): node names resolve as <name>.<domain> across the network."`
 	StateDir   string `type:"path" help:"Directory for the cache and sibling state files (default /var/lib/tincan)."`
-	FullConfig bool   `help:"Write every applicable section and field at its default, not just the fields likely to be changed."`
+	FullConfig bool   `help:"Materialize defaulted settings and common toggles instead of a minimal config."`
 	Force      bool   `help:"Overwrite an existing config."`
 }
 

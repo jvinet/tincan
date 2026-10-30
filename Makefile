@@ -9,7 +9,7 @@ LDFLAGS := -X 'github.com/jvinet/tincan/internal/version.Version=$(VERSION)' \
            -X 'github.com/jvinet/tincan/internal/version.Date=$(DATE)'
 
 build:
-	go build -ldflags "$(LDFLAGS)" -o ./bin/tincan ./cmd/tincan
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o ./bin/tincan ./cmd/tincan
 
 install: build
 	install -Dm755 ./bin/tincan $(DESTDIR)/usr/local/bin/tincan
@@ -22,7 +22,7 @@ test-race:
 	go test -race ./...
 
 test-integration:
-	go test -tags integration ./test/integration/...
+	TINCAN_RUN_NETNS_INTEGRATION=1 go test -count=1 -v -tags integration ./test/integration/...
 
 lint:
 	golangci-lint run

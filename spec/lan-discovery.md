@@ -1,5 +1,11 @@
 # Tincan — LAN Peer Discovery
 
+Status: implemented design, with the current behavior summarized below.
+The context and delivery proposal retain their historical motivation; API
+sketches are not compatibility guarantees. See [Networking](../doc/networking.md)
+for operator instructions. Privileged discovery/relay scenarios in the test
+plan remain planned coverage, not claims about the existing integration test.
+
 ## Context
 
 Two NAT'd peers in the same physical LAN that both register with the same
@@ -42,16 +48,16 @@ and doesn't require introducing a tunnel-internal control plane.
 | Beacon serialization | `msgpack/v5` (already a project dep) |
 | Authentication | Implicit — beacon claims a pubkey; downstream WG handshake either succeeds or doesn't |
 | Pubkey filtering | Listener drops beacons whose claimed pubkey isn't in the current directory |
-| Beacon cadence | 30s steady-state; initial burst of 3 over 5s on startup; on-receipt response when a known pubkey is unfamiliar (rate-limited to 1/peer/5s) |
+| Beacon cadence | 30s steady-state; initial burst of 3 over 5s on startup; on-receipt response when a known pubkey is unfamiliar (rate-limited globally to 1/5s) |
 | Egress interface(s) | Every non-loopback, non-Tincan link with at least one global-scope IPv4 or IPv6 address |
 | New WG state? | **No.** LAN endpoint is just another candidate in `chooseEndpoint` precedence |
 | Endpoint precedence | `Endpoint > LANEndpoint (fresh) > ObservedEndpoint > empty`; same-NAT peers retry the last-known LAN endpoint even past TTL (see below) |
 | LAN endpoint TTL | 90s since last beacon (3× cadence); not enforced for same-NAT peers, whose only fallback is a hairpin address |
-| Invalidation on failure | Entering `RELAYED` for a peer marks that peer's LAN endpoint as failed; next beacon re-validates. Same-NAT peers bypass the blacklist |
+| Invalidation on failure | Entering `RELAYED` for a peer marks that peer's LAN endpoint as failed; only a different advertised endpoint clears the failure. Same-NAT peers bypass the blacklist |
 | Directory schema | **No change.** Discovery is purely client-local |
 | Config knob | `[discovery].enabled` (default `true`); separate from `[observe]` |
 | Module path | `internal/discovery/` (new) |
-| Status display | `DIRECT` peers show `(lan)` suffix when active endpoint is in RFC1918 / ULA |
+| Status display | Direct peers show `LAN` in the text STATUS column when the active endpoint is private or link-local |
 
 ---
 
@@ -96,9 +102,9 @@ type Beacon struct {
 Wire size: ~70 bytes msgpack-encoded. Well under any sane MTU.
 
 Schema notes:
-- `omitempty` not used here — every field is required for V1 beacons. A
-  beacon with `V > 1` MUST be tolerated by V1 decoders (unknown fields
-  ignored, all V1-known fields still parsed).
+- Receivers require nonzero `v`, nonempty `pk`, and nonzero `port`.
+  `n` is unused and may be zero or absent. A beacon with `V > 1` is tolerated
+  by V1 decoders (unknown fields ignored, all V1-known fields still parsed).
 - No timestamp. Receivers stamp their local clock; sender clocks don't
   participate in the protocol.
 - No signature. The pubkey is a *claim*; the downstream WG handshake
@@ -108,14 +114,16 @@ Schema notes:
 
 - **Steady-state:** every 30s. Each cycle emits one beacon per eligible
   egress interface (see below).
-- **Startup burst:** at daemon start, send beacons at `t = 0s, 2s, 5s`.
-  Speeds convergence when two peers come up around the same time.
+- **Startup burst:** attempt beacons at `t = 0s, 2s, 5s`. An attempt is
+  skipped until the first successful apply provides the node's key and listen
+  port; a slow initial sync can therefore miss the burst.
 - **Reactive:** when a beacon arrives from a directory pubkey we haven't
   seen in the LAN store yet, send a beacon back (within the next 200ms,
-  jittered). Rate-limited to 1 reactive beacon per pubkey per 5s. This
+  jittered). Rate-limited globally to 1 reactive beacon per 5s. This
   collapses convergence to a single round-trip in the common case.
-- **Triggered:** on `SIGHUP` or any wake-channel event, also send a
-  beacon (rate-limited to 1 / 1s).
+- SIGHUP and daemon wake events trigger reconciliation, not an extra beacon.
+  Sender cadence and multicast sockets are startup settings; changes require
+  restarting the daemon.
 
 Beacons are *always* sent when discovery is enabled — we don't condition
 sending on "directory shows a peer with matching `oep`" because the
@@ -132,13 +140,12 @@ A "live LAN interface" is any kernel link satisfying *all* of:
 1. Not loopback (`lo`).
 2. Not the Tincan interface itself (default `tincan0`, per
    `cfg.Wireguard.Interface`).
-3. State `UP` (per `netlink.LinkAttrs.OperState`).
+3. `net.FlagUp` is set (enumeration uses `net.Interfaces`, not netlink).
 4. Has at least one non-link-local, non-loopback IP address.
 
-For each live LAN interface, the sender opens a socket with
-`IP_MULTICAST_IF` (IPv4) / `IPV6_MULTICAST_IF` (IPv6) set to that
-interface's index, joins the group, and writes the beacon. For IPv6,
-zone IDs are honored (`ff02::1:8443%eth0`).
+The sender reuses one socket per family and selects each live LAN interface
+with `IP_MULTICAST_IF` (IPv4) / `IPV6_MULTICAST_IF` (IPv6) before writing a
+beacon. Receivers, not senders, join the multicast groups.
 
 If a node has multiple LAN interfaces (Wi-Fi + Ethernet on a laptop),
 beacons go out on every one — the peer on the other side may only be
@@ -147,8 +154,7 @@ treated as one logical event (deduped by pubkey + source IP).
 
 ### Receiving and processing
 
-A single listener goroutine joins both groups (IPv4 + IPv6) on the
-default port and reads beacons.
+A listener goroutine per family reads beacons on the configured port.
 
 Group membership is not a join-once affair. A maintainer goroutine per
 family re-enumerates the live LAN interfaces every beacon interval and
@@ -201,15 +207,15 @@ chooseEndpoint(self, node, lanStore, now):
   if node.Endpoint != ""                       -> use operator endpoint
   staleOK := sameNAT(self, node)               // admin observed both at one public IP
   if lan := lanStore.Lookup(node.PublicKey, now, staleOK); lan != "" -> use lan
-  if observedFresh(node, now)                  -> use ObservedEndpoint
-  return ""
+  return node.ObservedEndpoint                 // no client-side observation TTL
 ```
 
 Where `lanStore.Lookup` returns the LAN endpoint iff:
 - An entry exists for `node.PublicKey`,
 - `now - LearnedAt <= LANEndpointTTL` (90s default),
-- `FailedAt.IsZero() || FailedAt.Before(LearnedAt)` (not blacklisted by
-  a more recent failure).
+- `FailedEndpoint != Endpoint` (that specific endpoint is not blacklisted).
+  Repeated beacons for the same failed address refresh its timestamp but do
+  not make it usable again.
 
 With `staleOK` (peer observed behind the same public IP as self) the TTL
 and blacklist checks are skipped and the most recently learned endpoint
@@ -238,6 +244,7 @@ type LANState struct {
     Endpoint  string
     LearnedAt time.Time
     FailedAt  time.Time
+    FailedEndpoint string
 }
 ```
 
@@ -280,7 +287,7 @@ the state machine needs to do differently. Adding a third state would
 duplicate transition logic (DIRECT↔LAN would have all the same edges as
 DIRECT↔RELAYED) for no behavioral gain.
 
-The `(lan)` label in `tincan status` is a presentation-layer detail —
+The `LAN` status label in `tincan status` is a presentation-layer detail —
 status code can inspect the chosen endpoint's IP class and tag DIRECT
 peers accordingly. Doesn't need a state-machine signal.
 
@@ -316,14 +323,13 @@ discovery is on with defaults.
 
 Validation:
 - `beacon_ttl >= 2 × beacon_interval` (else single-packet loss kills
-  the endpoint between cycles); warn and clamp at load.
+  the endpoint between cycles); reject invalid configurations at load.
 - Multicast addresses must be valid + actually multicast (`IsMulticast()
   == true`); fail config load with a clear error otherwise.
-- IPv6 address must be link-local scope (`ff02::/16`); warn and
-  proceed otherwise (operator may be doing something exotic).
+- IPv6 scope is not further restricted; the default group is link-local.
 
-CLI flag for one-off override: `tincan up --discovery=false` (mostly
-for debugging).
+There is no CLI discovery override. Set `[discovery].enabled = false` and
+restart the daemon to disable it.
 
 ---
 
@@ -336,76 +342,45 @@ internal/discovery/
 ├── sender.go         # sender goroutine: cadence, interface enumeration, send sockets
 ├── listener.go       # listener goroutine: bind, receive, parse, hand off to Store
 ├── store.go          # LANState, in-memory map, mutex, lookup/update/invalidate API + tests
-├── iface.go          # live-LAN-interface enumeration (Linux netlink)
-└── discovery_test.go # integration: pair of fake nodes on loopback multicast group
+└── iface.go          # live-LAN-interface enumeration (net.Interfaces)
 ```
 
-Public API (consumed by `internal/cli/`):
+The CLI calls `Start(ctx, cfg, dirSource, wakeCh)`, which returns `*Store`.
+`Store` is a concrete, mutex-protected type. Its methods include `Lookup`,
+`LookupLastKnown`, `Update` (returning `UpdateResult`), `MarkFailed`, `GC`,
+`SetSelf`, and `Snapshot`; see `store.go` for their signatures.
 
-```go
-type Store interface {
-    Lookup(pubkey string, now time.Time) string  // "" if none
-    Update(pubkey, endpoint string, now time.Time)
-    MarkFailed(pubkey string, now time.Time)
-    Snapshot() map[string]LANState               // for status / debugging
-}
-
-func Start(ctx context.Context, cfg Config, self directory.Node, dirSource func() directory.Directory) (Store, error)
-```
-
-`Start` launches sender and listener goroutines. `dirSource` is a
-closure that returns the current directory so listener can filter
-unknown pubkeys without holding a directory reference (which changes
-between syncs).
+`Start` launches sender and listener goroutines. `dirSource` yields the latest
+directory for membership filtering. `wakeCh` nudges reconciliation when a
+candidate changes; `SetSelf` supplies the key and live port after apply.
 
 ---
 
 ## Daemon loop integration
 
-Modify `runDaemonLoop` in `internal/cli/up.go`:
+`runDaemonLoop` in `internal/cli/up.go` starts discovery once before polling.
+The runtime exposes its latest directory through an `atomic.Pointer`-backed
+`dirSource` closure and passes its store into reconciliation. Both full syncs
+and the 30-second relay ticks call `markLANFailures` on DIRECT → RELAYED edges
+and pass a lookup closure through `manager.Apply` to `chooseEndpoint`.
 
-1. Build a `dirSource` closure that snapshots the latest directory (the
-   loop already has it as `res.Directory`; wrap in `sync.Mutex` or use
-   `atomic.Value`).
-2. After `startNetworkWatcher`, also call
-   `discovery.Start(watchCtx, cfg.Discovery, self, dirSource)` — store
-   returned in a local variable.
-3. Pass the store into `runDaemonIteration` alongside `controller`.
-4. In `runDaemonIteration`, after `controller.Update(...)`, call
-   `lanStore.MarkFailed(...)` for each peer that transitioned
-   `DIRECT → RELAYED` this iteration (compare `prevModes` ↔
-   `decision.PeerStates`).
-5. Pass the store into `BuildPeerConfigs` (via `manager.Apply`) so
-   `chooseEndpoint` can consult it.
-
-Wake plumbing: the listener pushes to the existing `wakeCh` whenever the
-store changes. Reason string: `"lan endpoint discovered"` or `"lan
-endpoint updated"`.
+The listener sends `"lan endpoint learned"` on `wakeCh` when a candidate changes.
+After a successful full apply, `SetSelf` supplies the live key and listen port;
+GC and snapshot persistence run on that full-iteration cadence too.
 
 ---
 
 ## Status display
 
-In `internal/cli/status.go`:
+Text status labels a direct peer's private or link-local active endpoint as
+`LAN` in the STATUS column. This is an IP-address classification, not an
+assertion that discovery supplied the endpoint. It also reports the count
+of learned LAN endpoints from the daemon's persisted snapshot.
 
-- For each peer with `Mode == "direct"`, inspect the active endpoint
-  (from `wgctrl` snapshot). If the IP portion is RFC1918 (10/8,
-  172.16/12, 192.168/16) or ULA (`fc00::/7`), append `(lan)` to the
-  endpoint label.
-- New row in the status output: `lan endpoints learned: N` (count
-  from store snapshot).
-
-`tincan status --json` exposes:
-```json
-"peers": [
-  { "name": "kilo", "mode": "direct", "endpoint": "192.168.1.42:51820",
-    "endpoint_source": "lan", ... }
-]
-```
-
-`endpoint_source` is one of: `operator`, `lan`, `observed`, `roamed`,
-`unknown`. Derived from comparing the wgctrl endpoint against the
-operator/observed/lan candidates.
+`tincan status --json` exposes live peers under `.wireguard.peers` and learned
+candidates under `.discovery.lan_endpoints`. There is no `endpoint_source`
+field. Discovery snapshots are written on full reconciliations, not on every
+received beacon or relay tick.
 
 ---
 
@@ -434,16 +409,13 @@ Failure flow:
 T = 0:00   discovery as above; store["kilo"] = 192.168.1.42:51820
 T = 0:00   peer kilo's Endpoint set to that; handshake attempted; fails
            (LAN firewall, isolated VLAN, whatever)
-T = 1:30   relay state machine: handshake stale > 90s → DIRECT → RELAYED
-T = 1:30   runDaemonIteration sees the transition → store.MarkFailed("kilo")
-T = 1:30   peer kilo is now a shadow peer routed via relay
-T = 0:30   next beacon from kilo arrives, store["kilo"].LearnedAt updated
-           → LearnedAt > FailedAt → store entry usable again
-T = 0:30.1 kernel (shadow peer) keeps probing handshakes via current peer
-           Endpoint, which BuildPeerConfigs has now flipped back to LAN
-           (because chooseEndpoint sees lan as usable again)
-T = 0:30.1 if LAN still doesn't work, RELAYED stays; cycle repeats until
-           LAN is genuinely viable or operator disables discovery
+T > 3:00   next relay tick sees stale handshake → DIRECT → RELAYED
+           store.MarkFailed("kilo") blacklists this exact LAN endpoint
+           traffic now uses the relay; a Tincan shadow peer keeps probing
+T = later  a beacon repeating the failed endpoint refreshes LearnedAt only
+           a different advertised endpoint can clear the blacklist
+           same-NAT peers bypass the blacklist and retain the LAN probe
+T = later  a successful shadow handshake restores DIRECT on a relay tick
 ```
 
 The cycle's correctness depends on `lan_ttl > beacon_interval` and on
@@ -472,11 +444,9 @@ drops them (B's pubkeys aren't in A's directory). One round-trip of
 wasted CPU per beacon; no incorrect behavior.
 
 ### IPv4 / IPv6 dual stack
-Both groups are joined. A peer reachable on both will likely have two
-LAN endpoints learned (one IPv4, one IPv6). The store keeps the most
-recent; for predictability, we prefer IPv6 ULA/GUA over IPv4 RFC1918
-when both arrive in the same cycle (lower latency at scale, no NAT
-weirdness). Implementation: tie-break in `Update` by address family.
+Both groups are joined, but the store tracks only one endpoint per peer.
+The first usable endpoint is pinned until it fails or expires. There is no
+address-family preference or IPv6 tie-break.
 
 ### Beacon receive on the Tincan interface
 The listener binds the wildcard address, so packets can reach it on
@@ -505,14 +475,14 @@ from the peer's perspective. Three things heal this:
    store entry with our new IP.
 2. The existing `network_watch.go` deduper already handles the kernel-
    side notifications.
-3. If the peer fails to handshake during the gap, it'll go RELAYED for
-   ~90s and recover on the next beacon. Minor disruption, well within
-   tolerance.
+3. If the peer fails to handshake for over 3 minutes, it goes RELAYED on
+   the next 30-second tick. A different beacon endpoint becomes a candidate;
+   a successful shadow handshake, not a timer, restores direct routing.
 
 ### Same machine, multiple Tincan daemons (testing only)
-Listener and sender both bind via `SO_REUSEPORT`. Two daemons on the
-same host can join the same group; each receives the other's beacons
-and processes them (filter on self-source-IP drops them as expected).
+The listener binds a wildcard UDP port without `SO_REUSEPORT`. A second
+local daemon using that port cannot start discovery. Even with separate
+ports, self-source-IP filtering excludes beacons from the same machine.
 
 ### Multicast snooping switches
 IGMP/MLD snooping switches will forward our multicast traffic to ports
@@ -551,15 +521,15 @@ rules bound the damage (`internal/discovery/store.go`):
   spoofed flood of the same bad address can no longer keep re-validating
   a dead path.
 
-Net effect of a one-shot spoof that wins the race: up to ~90s of broken
-direct connectivity to kilo (relay carries traffic meanwhile), then the
-attacker's endpoint is blacklisted. A *persistent* attacker can still
-delay LAN recovery by rotating through fresh bad endpoints while kilo's
-real path is down, but each costs a 90s cycle and the real beacon
-competes for the slot; it cannot hold a working path hostage. Same-NAT
-peers are unaffected throughout: they look up with `staleOK`, bypassing
-the blacklist, so their probe target is always the last-known endpoint.
-No data leak in any case (the handshake never completes).
+A spoof that wins the initial race can disrupt direct connectivity until
+failure detection (over 3 minutes, evaluated on 30-second ticks) switches
+traffic to the relay. A proven-live kernel endpoint is preserved rather
+than overwritten. A persistent attacker can still delay LAN recovery by
+advertising fresh bad endpoints while the real path is down.
+
+Same-NAT peers bypass the blacklist and continue probing their stored LAN
+candidate; this is a recovery heuristic, not beacon authentication. No
+payload leaks to an attacker without the peer's WireGuard private key.
 
 Full authentication needs a future schema (`V == 2`) embedding an
 Ed25519 signature over the beacon body using the sender's identity key
@@ -592,27 +562,28 @@ discovery beacons would make their coexistence visible. Minor.
 
 ### Unit (`go test ./internal/discovery/...`)
 - **`beacon_test.go`** — round-trip msgpack encode/decode; reject
-  malformed beacons (truncated, wrong type, unknown `V`); tolerate
+  malformed beacons (truncated, wrong type, zero `V`); tolerate
   forward-compatible `V=2` payloads by ignoring unknown fields.
 - **`store_test.go`** — `Update` adds an entry; `Lookup` honors TTL;
-  `MarkFailed` blacklists until next `Update`; `Lookup` returns empty
+  `MarkFailed` blacklists until a different endpoint is learned; `Lookup` returns empty
   for unknown pubkey; concurrent `Update` / `Lookup` is race-free
   (`-race`).
-- **`iface_test.go`** — live-LAN-interface filter against a synthetic
-  netlink fixture (loopback excluded, tincan0 excluded, down links
-  excluded).
+- **`iface_test.go`** — scope and interface filtering (loopback, the tunnel,
+  and down interfaces are excluded).
 
-### Integration (`//go:build integration`)
+### Planned discovery integration coverage (not yet automated)
 Two netns on the same host, joined by a `veth` pair, both running a
 Tincan daemon with `[discovery].enabled = true` and a fake drop. Verify:
 
-1. After `tincan up` on both sides, each daemon's lan store contains
+1. After `tincan up --daemon` on both sides, each daemon's LAN store contains
    the other's pubkey within 10s.
 2. WG handshake completes on the LAN endpoint (`wg show tincan0`
    shows the peer's LAN IP, not the relay).
 3. Block the multicast group (e.g., `iptables -A INPUT -d 239.255.84.67
-   -j DROP`) and restart one daemon; verify it goes RELAYED within 2
-   minutes and `MarkFailed` is recorded.
+   -j DROP`) and interrupt the direct path; verify it goes RELAYED after
+   the 3-minute stale-handshake threshold plus at most one 30-second tick,
+   and `MarkFailed` is recorded. Blocking beacons alone does not invalidate
+   a working WireGuard path.
 4. Unblock multicast; verify recovery to DIRECT within 1 minute.
 
 ### Manual (three-machine setup)
@@ -625,11 +596,11 @@ end-to-end on the same hardware the relay fallback was developed on:
 3. `iperf3` between `tau` and `kilo`; throughput should match the LAN
    medium (≥ 100 Mbps on gigabit Ethernet), not the WAN uplink.
 4. Disable Wi-Fi/Ethernet on one side, confirm fallback to relay
-   within ~2 minutes; re-enable and confirm recovery.
+   after roughly 3 minutes plus one relay tick; re-enable and confirm recovery.
 
 ---
 
-## Phasing
+## Original delivery proposal (historical)
 
 Implementation can land in two PRs, each independently shippable:
 
@@ -645,7 +616,7 @@ Implementation can land in two PRs, each independently shippable:
 **PR 2 — Activate LAN preference**
 - `chooseEndpoint` consults the store between operator and observed.
 - Relay iteration calls `MarkFailed` on `DIRECT → RELAYED` edges.
-- Status display adds `(lan)` suffix.
+- Status display adds the `LAN` label.
 - All integration / manual tests above pass.
 
 This phasing lets PR 1 sit in production for a cycle (collecting

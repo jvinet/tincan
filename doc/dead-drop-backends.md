@@ -3,7 +3,8 @@
 [← Back to overview](../README.md)
 
 Every config has two drop sections: `[drop.admin]` is how this node writes the
-directory (admin only); `[drop.client]` is how everyone reads it. Keeping them
+directory (admin only) and also reads it; `[drop.client]` is how non-admin nodes
+read it and is the section exported in bootstraps. Keeping them
 separate means client nodes never see admin credentials, and admins can write
 locally while clients pull from HTTP/CDN.
 
@@ -153,9 +154,12 @@ but does not create the zone.
 The sealed directory is base64-encoded and split across multiple TXT records
 (each ≤255 bytes), tagged so clients reassemble them in order and ignore any
 unrelated TXT records at the same name. Publishing is not atomic: during DNS
-propagation a client that reads a half-updated set fails to reassemble or verify
-it, keeps its cached directory, and picks up the change on the next sync — so a
-short `ttl` is worthwhile. A directory needing more than ~100 records (≈16 KB, a
+propagation a client that reads a half-updated set may fail to reassemble,
+decrypt, or verify it. A reassembly failure falls back to the cache; a decryption
+or signature failure fails the sync without replacing the cache or touching
+the running tunnel. A fresh `up` can likewise fail in that window; use
+`up --no-sync` to apply the existing cache. The next sync retries the drop, so a
+short provider-supported `ttl` is worthwhile. A directory needing more than ~100 records (≈16 KB, a
 large network) is rejected; use S3 or HTTP for that.
 
 ## Nostr relays
@@ -192,7 +196,10 @@ How it works: the sealed directory is published as a NIP-78 replaceable event
 (kind 30078) tagged with the `identifier`; relays keep only the latest event per
 key, so it acts as a single mutable slot. Reads query every relay, verify each
 event's author, kind, tag, id, and signature, and take the newest valid one — so
-an untrusted or hostile relay cannot substitute a forged or stale directory.
+an untrusted or hostile relay cannot forge an event from the pinned author.
+It can still replay an older signed event: directory serials reject rollback
+below the local floor, while `max_directory_age` warns about a frozen current
+serial.
 A write succeeds as long as one relay accepts the event.
 
 The Nostr key only controls **who may write the relay slot**. The directory blob

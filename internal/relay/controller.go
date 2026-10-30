@@ -67,12 +67,6 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 		if node.PublicKey == self.PublicKey {
 			continue
 		}
-		// Peers with an operator-configured public endpoint don't need relay.
-		if node.Endpoint != "" {
-			slog.Debug("relay: peer ineligible (has public endpoint)", "peer", node.Name)
-			newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
-			continue
-		}
 		// A plain-WireGuard member is a hub-and-spoke spoke: its enrolled
 		// config knows only its hub, so it never initiates to anyone else and
 		// drops handshakes from keys it doesn't recognize. Direct is
@@ -92,6 +86,13 @@ func (c *Controller) Update(self directory.Node, dir directory.Directory, peers 
 				slog.Debug("relay: plain-WireGuard peer direct (self is its hub, or no hub exists)", "peer", node.Name)
 				newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
 			}
+			continue
+		}
+		// A reachable Tincan peer can be dialed directly. A plain-WireGuard
+		// spoke still knows only its hub, even if an endpoint was published.
+		if node.Endpoint != "" {
+			slog.Debug("relay: peer ineligible (has public endpoint)", "peer", node.Name)
+			newStates[node.PublicKey] = PeerState{Mode: ModeDirect, EnteredAt: now}
 			continue
 		}
 		// Tincan peers initiate outbound to self's public endpoint and keep

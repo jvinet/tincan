@@ -24,6 +24,11 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return err
 	}
+	unlock, err := cache.LockAdmin(cfg.Sync.StateDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	d, err := loadAdminDrop(cfg)
 	if err != nil {
 		return err
@@ -34,7 +39,7 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	}
 	p := newPrinter(os.Stdout)
 	remote, fetchErr := fetchDirectory(ctx, cfg, d)
-	if err := reconcilePublishSerial(&source, remote, fetchErr, c.Force); err != nil {
+	if err := preparePublishSerial(cfg, &source, remote, fetchErr, c.Force); err != nil {
 		slog.Error("publish refused", "error", err)
 		return err
 	}
@@ -45,9 +50,6 @@ func (c *PublishCmd) Run(ctx context.Context, g *Globals) error {
 	default: // forced past a fetch failure
 		slog.Warn("publishing without the remote serial check", "error", fetchErr)
 		p.warn("publishing without the remote serial check (--force); %v", fetchErr)
-	}
-	if err := bumpDirectory(&source); err != nil {
-		return err
 	}
 	if err := publishDirectory(ctx, cfg, d, source, true); err != nil {
 		slog.Error("publish failed", "error", err)

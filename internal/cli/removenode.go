@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/jvinet/tincan/internal/cache"
 	"github.com/jvinet/tincan/internal/config"
 )
 
@@ -22,6 +23,11 @@ func (c *RemoveNodeCmd) Run(ctx context.Context, g *Globals) error {
 	if err := config.RequireAdmin(*cfg); err != nil {
 		return err
 	}
+	unlock, err := cache.LockAdmin(cfg.Sync.StateDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	d, err := loadAdminDrop(cfg)
 	if err != nil {
 		return err

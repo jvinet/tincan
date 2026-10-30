@@ -263,6 +263,10 @@ func SerialPath(stateDir string) string {
 	return filepath.Join(stateDir, "cache.serial")
 }
 
+func PublishSerialPath(stateDir string) string {
+	return filepath.Join(stateDir, "publish.serial")
+}
+
 func DiscoveryStatePath(stateDir string) string {
 	return filepath.Join(stateDir, "discovery.json")
 }
