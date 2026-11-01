@@ -4,7 +4,9 @@
 
 `tincan` reads `/etc/tincan/config.toml` by default; override with
 `-c /path/to/config.toml`. The file is created `0600` and Tincan warns at load
-time if it isn't.
+time if it isn't. For concurrent networks, use one config per network with
+separate interfaces, ports, state directories, and PID files; see
+[Multiple networks on one host](operations.md#multiple-networks-on-one-host).
 
 For backend-specific fields, see [Dead-drop backends](dead-drop-backends.md).
 The [networking guide](networking.md) explains endpoint observation and LAN
@@ -54,7 +56,7 @@ beacon_interval = "30s"        # steady-state cadence
 beacon_ttl      = "90s"        # learned endpoint expiry (must be >= 2x beacon_interval)
 
 [dns]                          # VPN DNS names; active only when the directory has a domain
-manage_hosts = true            # default on; maintain the managed /etc/hosts block
+manage_hosts = true            # default on; maintain this interface's /etc/hosts block
 # serve      = true            # force the DNS listener on/off; unset = auto (hubs only)
 # upstream   = "192.168.1.1"   # where the hub forwards non-VPN queries (host[:port],
                                # port 53 implied; default: first resolv.conf nameserver)

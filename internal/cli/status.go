@@ -538,7 +538,7 @@ func dnsStatusFields(cfg *config.Config, dir directory.Directory, self directory
 		out["hosts_error"] = err.Error()
 		return out
 	}
-	_, changed, err := hosts.Rewrite(content, block)
+	_, changed, err := hosts.Rewrite(content, cfg.Wireguard.Interface, block)
 	if err != nil {
 		out["hosts_error"] = err.Error()
 		return out

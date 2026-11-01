@@ -43,7 +43,7 @@ func TestApplyCreatesUpdatesRemoves(t *testing.T) {
 	}
 
 	// First write appends the marked block after a blank line.
-	changed, err := Apply(path, Block(sampleDir("vpn")))
+	changed, err := Apply(path, "tincan0", Block(sampleDir("vpn")))
 	if err != nil || !changed {
 		t.Fatalf("first apply: changed=%v err=%v", changed, err)
 	}
@@ -51,7 +51,7 @@ func TestApplyCreatesUpdatesRemoves(t *testing.T) {
 	if !strings.HasPrefix(string(data), userContent) {
 		t.Fatalf("operator content not preserved verbatim:\n%s", data)
 	}
-	for _, want := range []string{beginMarker, "10.42.0.3\tnas.vpn", endMarker} {
+	for _, want := range []string{beginMarker("tincan0"), "10.42.0.3\tnas.vpn", endMarker("tincan0")} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("missing %q in:\n%s", want, data)
 		}
@@ -59,7 +59,7 @@ func TestApplyCreatesUpdatesRemoves(t *testing.T) {
 
 	// Idempotent: same block, no write, mtime untouched.
 	before, _ := os.Stat(path)
-	changed, err = Apply(path, Block(sampleDir("vpn")))
+	changed, err = Apply(path, "tincan0", Block(sampleDir("vpn")))
 	if err != nil || changed {
 		t.Fatalf("idempotent apply: changed=%v err=%v", changed, err)
 	}
@@ -71,7 +71,7 @@ func TestApplyCreatesUpdatesRemoves(t *testing.T) {
 	// Update in place: a node leaves; only the block region changes.
 	smaller := sampleDir("vpn")
 	smaller.Nodes = smaller.Nodes[:2]
-	if changed, err = Apply(path, Block(smaller)); err != nil || !changed {
+	if changed, err = Apply(path, "tincan0", Block(smaller)); err != nil || !changed {
 		t.Fatalf("update apply: changed=%v err=%v", changed, err)
 	}
 	data, _ = os.ReadFile(path)
@@ -83,7 +83,7 @@ func TestApplyCreatesUpdatesRemoves(t *testing.T) {
 	}
 
 	// Empty block removes the markers; operator content stays.
-	if changed, err = Apply(path, ""); err != nil || !changed {
+	if changed, err = Apply(path, "tincan0", ""); err != nil || !changed {
 		t.Fatalf("removal apply: changed=%v err=%v", changed, err)
 	}
 	data, _ = os.ReadFile(path)
@@ -91,7 +91,7 @@ func TestApplyCreatesUpdatesRemoves(t *testing.T) {
 		t.Fatalf("removal left traces or ate content:\n%s", data)
 	}
 	// Removing again is a no-op.
-	if changed, err = Apply(path, ""); err != nil || changed {
+	if changed, err = Apply(path, "tincan0", ""); err != nil || changed {
 		t.Fatalf("second removal: changed=%v err=%v", changed, err)
 	}
 }
@@ -99,14 +99,14 @@ func TestApplyCreatesUpdatesRemoves(t *testing.T) {
 func TestApplyMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hosts")
 	// Missing file + empty block: nothing to do, no file created.
-	if changed, err := Apply(path, ""); err != nil || changed {
+	if changed, err := Apply(path, "tincan0", ""); err != nil || changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("empty apply created a file")
 	}
 	// Missing file + block: created 0644 with just the marked block.
-	if changed, err := Apply(path, "10.42.0.1\talice.vpn\n"); err != nil || !changed {
+	if changed, err := Apply(path, "tincan0", "10.42.0.1\talice.vpn\n"); err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
 	st, err := os.Stat(path)
@@ -123,7 +123,7 @@ func TestApplyPreservesMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte("127.0.0.1 localhost\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Apply(path, "10.42.0.1\talice.vpn\n"); err != nil {
+	if _, err := Apply(path, "tincan0", "10.42.0.1\talice.vpn\n"); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := os.Stat(path)
@@ -142,7 +142,7 @@ func TestApplyRefusesSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Apply(link, "10.42.0.1\talice.vpn\n"); !errors.Is(err, ErrSymlink) {
+	if _, err := Apply(link, "tincan0", "10.42.0.1\talice.vpn\n"); !errors.Is(err, ErrSymlink) {
 		t.Fatalf("err=%v, want ErrSymlink", err)
 	}
 	data, _ := os.ReadFile(target)
@@ -156,15 +156,15 @@ func TestRewriteMalformedMarkers(t *testing.T) {
 		name    string
 		content string
 	}{
-		{name: "begin only", content: "x\n" + beginMarker + "\nstuff\n"},
-		{name: "end only", content: "x\n" + endMarker + "\n"},
-		{name: "end before begin", content: endMarker + "\n" + beginMarker + "\n"},
-		{name: "double begin", content: beginMarker + "\n" + beginMarker + "\n" + endMarker + "\n"},
-		{name: "double end", content: beginMarker + "\n" + endMarker + "\n" + endMarker + "\n"},
+		{name: "begin only", content: "x\n" + legacyBeginMarker + "\nstuff\n"},
+		{name: "end only", content: "x\n" + legacyEndMarker + "\n"},
+		{name: "end before begin", content: legacyEndMarker + "\n" + legacyBeginMarker + "\n"},
+		{name: "double begin", content: legacyBeginMarker + "\n" + legacyBeginMarker + "\n" + legacyEndMarker + "\n"},
+		{name: "double end", content: legacyBeginMarker + "\n" + legacyEndMarker + "\n" + legacyEndMarker + "\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := Rewrite([]byte(tc.content), "10.42.0.1\ta.vpn\n"); !errors.Is(err, ErrMalformedMarkers) {
+			if _, _, err := Rewrite([]byte(tc.content), "tincan0", "10.42.0.1\ta.vpn\n"); !errors.Is(err, ErrMalformedMarkers) {
 				t.Fatalf("err=%v, want ErrMalformedMarkers", err)
 			}
 		})
@@ -172,23 +172,23 @@ func TestRewriteMalformedMarkers(t *testing.T) {
 }
 
 func TestRewritePreservesContentAfterBlock(t *testing.T) {
-	content := "before\n" + beginMarker + "\nold\n" + endMarker + "\nafter\n"
-	got, changed, err := Rewrite([]byte(content), "new\n")
+	content := "before\n" + beginMarker("tincan0") + "\nold\n" + endMarker("tincan0") + "\nafter\n"
+	got, changed, err := Rewrite([]byte(content), "tincan0", "new\n")
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
-	want := "before\n" + beginMarker + "\nnew\n" + endMarker + "\nafter\n"
+	want := "before\n" + beginMarker("tincan0") + "\nnew\n" + endMarker("tincan0") + "\nafter\n"
 	if string(got) != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
 func TestRewriteHandlesNoTrailingNewline(t *testing.T) {
-	got, changed, err := Rewrite([]byte("127.0.0.1 localhost"), "10.42.0.1\ta.vpn\n")
+	got, changed, err := Rewrite([]byte("127.0.0.1 localhost"), "tincan0", "10.42.0.1\ta.vpn\n")
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
-	want := "127.0.0.1 localhost\n\n" + beginMarker + "\n10.42.0.1\ta.vpn\n" + endMarker + "\n"
+	want := "127.0.0.1 localhost\n\n" + beginMarker("tincan0") + "\n10.42.0.1\ta.vpn\n" + endMarker("tincan0") + "\n"
 	if string(got) != want {
 		t.Fatalf("got:\n%q\nwant:\n%q", got, want)
 	}

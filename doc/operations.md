@@ -54,6 +54,72 @@ and exits; it is suitable for a `oneshot` service with a systemd timer, not a
 continuous daemon. Endpoint observation, LAN discovery, relay recovery, and
 the hub's DNS listener require daemon mode.
 
+## Multiple networks on one host
+
+Run one Tincan daemon per network, each with its own config. The defaults are
+for a single network; do not share state directories or PID files between
+instances. For example:
+
+| Setting | `/etc/tincan/work.toml` | `/etc/tincan/home.toml` |
+| --- | --- | --- |
+| `[wireguard].interface` | `tincan0` | `tincan1` |
+| `[wireguard].listen_port` | `51820` | `51830` |
+| Network CIDR (chosen at `init --cidr`) | `10.42.0.0/24` | `10.43.0.0/24` |
+| `[sync].state_dir` | `/var/lib/tincan/work` | `/var/lib/tincan/home` |
+| `[sync].pid_file` | `/run/tincan-work.pid` | `/run/tincan-home.pid` |
+| `[discovery].multicast_ipv4` | `239.255.84.67:51821` | `239.255.84.67:51831` |
+| `[discovery].multicast_ipv6` | `[ff02::1:8443]:51821` | `[ff02::1:8443]:51831` |
+| VPN DNS domain (optional) | `work.vpn` | `home.vpn` |
+
+Each config also needs its own network's keys and dead-drop settings. Use
+separate directory objects/paths (or Nostr slots) so publishing one network
+cannot overwrite another. When initializing or joining, pass `-c` and
+`--state-dir` to keep even the initial config and state separate; edit the
+remaining settings before bringing the interface up.
+
+Use non-overlapping tunnel CIDRs, also avoiding local LANs and other VPNs.
+Explicit WireGuard listen ports must be distinct on the host, and published
+endpoints must advertise the matching port. Discovery listeners bind their
+UDP ports exclusively: use different ports for each network, consistently
+on all members of that network, or set `[discovery].enabled = false`.
+Changing only the multicast group without changing the port is not enough.
+
+```sh
+sudo tincan -c /etc/tincan/work.toml up --daemon
+sudo tincan -c /etc/tincan/home.toml up --daemon
+sudo tincan -c /etc/tincan/work.toml status
+sudo tincan -c /etc/tincan/home.toml down --stop
+```
+
+Always select the config for administrative commands too, including
+`add-node`, `publish`, and `set-domain`.
+
+Both daemons can manage `/etc/hosts`: each block is identified by its
+WireGuard interface, updates are serialized, and clearing a domain or
+running `down` removes only that interface's block. Choose distinct DNS
+domains to avoid conflicting FQDNs. Old unlabelled blocks belong to
+`tincan0` and are migrated on its next apply; if an existing network used a
+different interface, remove its old unlabelled block manually before
+upgrading. Stop older daemons before using shared hosts management: older
+binaries do not understand the new markers or participate in locking.
+See [VPN DNS names](dns.md) for the marker format. Hub DNS listeners bind
+their own tunnel IPs, so they can each use UDP 53 unless another service
+already occupies those addresses (including a wildcard listener).
+
+For systemd, use separate units, or a template named `tincan@.service` based
+on the service above, with these substitutions:
+
+```ini
+[Service]
+PIDFile=/run/tincan-%i.pid
+ExecStart=/usr/local/bin/tincan -c /etc/tincan/%i.toml up --daemon
+```
+
+Keep `Type=forking` and the other service settings from the example. Match
+each config's `[sync].pid_file` to its unit's `PIDFile`, then enable the
+instances with `systemctl enable --now tincan@work tincan@home`. Do not also
+run the default `tincan.service` against either instance's resources.
+
 ## Logging
 
 Tincan writes structured logs to the OS syslog (facility `daemon`, tag
@@ -85,8 +151,9 @@ tail -f /var/log/daemon.log   # classic syslog
 ## Files Tincan touches
 
 - `/etc/tincan/config.toml` — primary config, mode `0600`
-- `/etc/hosts` — managed block between markers, only while the directory
-  carries a VPN domain (see [VPN DNS names](dns.md))
+- `/etc/hosts` — interface-scoped managed blocks between markers, only while
+  the directory carries a VPN domain (see [VPN DNS names](dns.md))
+- `/etc/hosts.tincan.lock` — persistent lock file serializing Tincan hosts updates
 - `/var/lib/tincan/cache.bin` — last successfully synced or published directory;
   it may not yet have been applied to WireGuard
 - `/var/lib/tincan/cache.serial` — monotonic serial guard against rollback

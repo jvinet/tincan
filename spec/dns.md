@@ -48,13 +48,18 @@ Two small, independent mechanisms; no control plane, no new trust:
   `/etc/hosts`, and the managed block must never shadow them. Spokes still get
   bare names via the search domain. All nodes are listed, including self and
   spokes.
-- **Markers are sacred.** Exactly one begin/end pair, matched as whole
-  trimmed lines; anything else is `ErrMalformedMarkers` and the file is left
+- **Markers are sacred.** At most one begin/end pair per WireGuard interface,
+  matched as whole trimmed lines. Markers include the interface in parentheses;
+  legacy unlabelled markers are aliases for `tincan0` and migrate on update.
+  Other interfaces' blocks are preserved. Duplicate, mismatched, unclosed, or
+  nested pairs are `ErrMalformedMarkers` and the file is left
   untouched — eating operator content out of `/etc/hosts` is the one
   unrecoverable failure mode. Symlinked hosts files (NixOS) are refused with
   `ErrSymlink` rather than replaced by a rename. Writes are atomic
   (renameio), mode-preserving, and skipped entirely when content is unchanged
-  (the daemon calls this every sync interval).
+  (the daemon calls this every sync interval). A persistent sibling
+  `.tincan.lock` file serializes the whole read-modify-write across processes;
+  locking the hosts inode would not survive atomic replacement.
 - **Hosts sync is warn-don't-fail** and runs *after* a successful WireGuard
   apply — names pointing at tunnel IPs the kernel doesn't route are worse
   than no names. It also runs when the domain is empty, which strips a stale

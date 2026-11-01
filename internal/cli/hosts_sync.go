@@ -36,7 +36,7 @@ func (h *hostsSyncer) sync(cfg *config.Config, dir directory.Directory, p *print
 	}
 	path := hostsPath(cfg)
 	block := hosts.Block(dir)
-	changed, err := hosts.Apply(path, block)
+	changed, err := hosts.Apply(path, cfg.Wireguard.Interface, block)
 	if err != nil {
 		slog.Warn("hosts block update failed", "path", path, "error", err)
 		// Dedupe on the root cause, not the full message: renameio errors
@@ -82,7 +82,7 @@ func removeHostsBlock(cfg *config.Config, p *printer) {
 		return
 	}
 	path := hostsPath(cfg)
-	changed, err := hosts.Apply(path, "")
+	changed, err := hosts.Apply(path, cfg.Wireguard.Interface, "")
 	if err != nil {
 		slog.Warn("hosts block removal failed", "path", path, "error", err)
 		p.warn("could not remove VPN DNS entries from %s: %v", path, err)

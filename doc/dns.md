@@ -32,19 +32,26 @@ sync — so no DNS server is involved at all. The daemon maintains a marker-
 delimited block after each successful apply:
 
 ```
-# BEGIN tincan managed block - do not edit between markers
+# BEGIN tincan managed block (tincan0) - do not edit between markers
 10.42.0.1	alice.vpn
 10.42.0.3	nas.vpn
-# END tincan managed block
+# END tincan managed block (tincan0)
 ```
 
 Entries are FQDN-only on purpose: if your machines already map bare names
 like `nas` to LAN addresses in `/etc/hosts`, tincan never shadows them.
-Everything outside the markers is preserved byte-for-byte; the block is
-updated atomically, only when its content actually changed, and removed on
-`tincan down` or after `set-domain --clear`. Resolution works offline
-(it's a file), survives daemon restarts, and needs no resolver
-configuration. A symlinked `/etc/hosts` (NixOS) is detected and left
+The interface in each marker identifies the network: `tincan1`, for example,
+gets a separate block. Legacy markers without an interface belong to
+`tincan0` and are replaced with labelled markers on its next apply.
+Everything outside that interface's markers is preserved byte-for-byte,
+including other networks' blocks. Updates are atomic, serialized across
+Tincan processes using `/etc/hosts.tincan.lock`, and skipped when unchanged.
+`tincan down` or `set-domain --clear` removes only the selected interface's
+block. Never delete the lock file while daemons are running. Use different
+VPN domains for different networks to avoid duplicate FQDNs; see
+[Multiple networks on one host](operations.md#multiple-networks-on-one-host).
+Resolution works offline (it's a file), survives daemon restarts, and needs
+no resolver configuration. A symlinked `/etc/hosts` (NixOS) is detected and left
 alone, with a warning.
 
 **Spokes: DNS served by the hub.** Phones and other plain-WireGuard

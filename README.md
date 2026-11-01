@@ -100,7 +100,8 @@ Then copy the bootstrap JSON file to the new client and:
 - [Networking](doc/networking.md) — endpoint discovery, relay fallback, and LAN
   discovery
 - [VPN DNS names](doc/dns.md) — member names and DNS for plain WireGuard clients
-- [Operations](doc/operations.md) — daemon, systemd, logging, and local files
+- [Operations](doc/operations.md) — daemon, systemd, multiple networks, logging,
+  and local files
 - [Architecture](doc/architecture.md) — directory security and implementation
   overview
 - [Development](doc/development.md) — build, test, and lint commands
