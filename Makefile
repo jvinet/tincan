@@ -1,4 +1,4 @@
-.PHONY: build install test test-race test-integration lint fmt
+.PHONY: build clean install test test-race test-integration lint fmt
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -10,6 +10,9 @@ LDFLAGS := -X 'github.com/jvinet/tincan/internal/version.Version=$(VERSION)' \
 
 build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o ./bin/tincan ./cmd/tincan
+
+clean:
+	rm -f ./bin/tincan coverage.out
 
 install: build
 	install -Dm755 ./bin/tincan $(DESTDIR)/usr/local/bin/tincan
